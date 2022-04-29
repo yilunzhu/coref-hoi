@@ -43,16 +43,24 @@ class CorefDataProcessor:
             self.tensor_samples = {}
             tensorizer = Tensorizer(self.config, self.tokenizer)
             paths = {
-                'trn': join(self.data_dir, f'train.{self.language}.{self.max_seg_len}.jsonlines'),
-                'dev': join(self.data_dir, f'dev.{self.language}.{self.max_seg_len}.jsonlines'),
-                'tst': join(self.data_dir, f'test.{self.language}.{self.max_seg_len}.jsonlines')
+                'trn': join(self.data_dir, self.config['dataset'], f'train.{self.language}.{self.max_seg_len}.jsonlines'),
+                'dev': join(self.data_dir, self.config['dataset'], f'dev.{self.language}.{self.max_seg_len}.jsonlines'),
+                'tst': join(self.data_dir, self.config['dataset'], f'test.{self.language}.{self.max_seg_len}.jsonlines')
+            }
+            singleton_paths = {
+                'trn': join(self.data_dir, self.config['dataset']+'_sg', f'train_sg.{self.language}.{self.max_seg_len}.jsonlines'),
+                'dev': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'dev_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines'),
+                'tst': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'test_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines')
             }
             for split, path in paths.items():
                 logger.info('Tensorizing examples from %s; results will be cached)' % path)
                 is_training = (split == 'trn')
+                sg_path = singleton_paths[split]
                 with open(path, 'r') as f:
                     samples = [json.loads(line) for line in f.readlines()]
-                tensor_samples = [tensorizer.tensorize_example(sample, is_training) for sample in samples]
+                with open(sg_path, 'r') as f:
+                    sg_samples = [json.loads(line) for line in f.readlines()]
+                tensor_samples = [tensorizer.tensorize_example(samples[i], sg_samples[i], is_training) for i in range(len(samples))]
                 self.tensor_samples[split] = [(doc_key, self.convert_to_torch_tensor(*tensor)) for doc_key, tensor
                                               in tensor_samples]
             self.stored_info = tensorizer.stored_info
@@ -66,7 +74,8 @@ class CorefDataProcessor:
 
     @classmethod
     def convert_to_torch_tensor(cls, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
-                                is_training, gold_starts, gold_ends, gold_mention_cluster_map):
+                                is_training, gold_sg_starts, gold_sg_ends, gold_starts, gold_ends,
+                                gold_mention_cluster_map, gold_sg_cluster_map):
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         input_mask = torch.tensor(input_mask, dtype=torch.long)
         speaker_ids = torch.tensor(speaker_ids, dtype=torch.long)
@@ -76,9 +85,13 @@ class CorefDataProcessor:
         is_training = torch.tensor(is_training, dtype=torch.bool)
         gold_starts = torch.tensor(gold_starts, dtype=torch.long)
         gold_ends = torch.tensor(gold_ends, dtype=torch.long)
+        gold_sg_starts = torch.tensor(gold_sg_starts, dtype=torch.long)
+        gold_sg_ends = torch.tensor(gold_sg_ends, dtype=torch.long)
         gold_mention_cluster_map = torch.tensor(gold_mention_cluster_map, dtype=torch.long)
+        gold_sg_cluster_map = torch.tensor(gold_sg_cluster_map, dtype=torch.long)
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
-               is_training, gold_starts, gold_ends, gold_mention_cluster_map,
+               is_training, gold_sg_starts, gold_sg_ends, gold_starts, gold_ends, \
+               gold_mention_cluster_map, gold_sg_cluster_map
 
     def get_cache_path(self):
         cache_path = join(self.data_dir, f'cached.tensors.{self.language}.{self.max_seg_len}.{self.max_training_seg}.bin')
@@ -120,15 +133,23 @@ class Tensorizer:
                 speaker_dict[speaker] = len(speaker_dict)
         return speaker_dict
 
-    def tensorize_example(self, example, is_training):
+    def tensorize_example(self, example, sg_example, is_training):
         # Mentions and clusters
         clusters = example['clusters']
         gold_mentions = sorted(tuple(mention) for mention in util.flatten(clusters))
+        sg_clusters = sg_example['clusters']
+        gold_singletons = sorted(tuple(sg) for sg in util.flatten(sg_clusters))
         gold_mention_map = {mention: idx for idx, mention in enumerate(gold_mentions)}
         gold_mention_cluster_map = np.zeros(len(gold_mentions))  # 0: no cluster
         for cluster_id, cluster in enumerate(clusters):
             for mention in cluster:
                 gold_mention_cluster_map[gold_mention_map[tuple(mention)]] = cluster_id + 1
+
+        gold_sg_map = {sg: idx for idx, sg in enumerate(gold_singletons)}
+        gold_sg_cluster_map = np.zeros(len(gold_singletons))  # 0: no cluster
+        for sg_cluster_id, sg_cluster in enumerate(sg_clusters):
+            for sg in sg_cluster:
+                gold_sg_cluster_map[gold_sg_map[tuple(sg)]] = sg_cluster_id + 1
 
         # Speakers
         speakers = example['speakers']
@@ -168,8 +189,9 @@ class Tensorizer:
         # Construct example
         genre = self.stored_info['genre_dict'].get(doc_key[:2], 0)
         gold_starts, gold_ends = self._tensorize_spans(gold_mentions)
+        gold_sg_starts, gold_sg_ends = self._tensorize_spans(gold_singletons)
         example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                          gold_starts, gold_ends, gold_mention_cluster_map)
+                          gold_sg_starts, gold_sg_ends, gold_starts, gold_ends, gold_mention_cluster_map, gold_sg_cluster_map)
 
         if is_training and len(sentences) > self.config['max_training_sentences']:
             return doc_key, self.truncate_example(*example_tensor)
@@ -177,7 +199,8 @@ class Tensorizer:
             return doc_key, example_tensor
 
     def truncate_example(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                         gold_starts, gold_ends, gold_mention_cluster_map, sentence_offset=None):
+                         gold_sg_starts, gold_sg_ends, gold_starts, gold_ends, gold_mention_cluster_map, gold_sg_cluster_map,
+                         sentence_offset=None):
         max_sentences = self.config["max_training_sentences"]
         num_sentences = input_ids.shape[0]
         assert num_sentences > max_sentences
@@ -199,5 +222,10 @@ class Tensorizer:
         gold_ends = gold_ends[gold_spans] - word_offset
         gold_mention_cluster_map = gold_mention_cluster_map[gold_spans]
 
+        gold_sg_spans = (gold_sg_starts < word_offset + num_words) & (gold_sg_ends >= word_offset)
+        gold_sg_starts = gold_sg_starts[gold_sg_spans] - word_offset
+        gold_sg_ends = gold_sg_ends[gold_sg_spans] - word_offset
+        gold_sg_cluster_map = gold_sg_cluster_map[gold_sg_spans]
+
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
-               is_training, gold_starts, gold_ends, gold_mention_cluster_map
+               is_training, gold_sg_starts, gold_sg_ends, gold_starts, gold_ends, gold_mention_cluster_map, gold_sg_cluster_map

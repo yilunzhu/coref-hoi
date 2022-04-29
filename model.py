@@ -67,6 +67,8 @@ class CorefModel(nn.Module):
         self.update_steps = 0  # Internal use for debug
         self.debug = True
 
+        self.ms = self.make_embedding(1)  # Set a initial value for the score of all mentions
+
     def make_embedding(self, dict_size, std=0.02):
         emb = nn.Embedding(dict_size, self.config['feature_emb_size'])
         init.normal_(emb.weight, std=std)
@@ -106,7 +108,8 @@ class CorefModel(nn.Module):
         return self.get_predictions_and_loss(*input)
 
     def get_predictions_and_loss(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
-                                 is_training, gold_starts=None, gold_ends=None, gold_mention_cluster_map=None):
+                                 is_training, gold_sg_starts=None, gold_sg_ends=None, gold_starts=None, gold_ends=None,
+                                 gold_mention_cluster_map=None, gold_sg_cluster_map=None):
         """ Model and input are already on the device """
         device = self.device
         conf = self.config
@@ -126,21 +129,35 @@ class CorefModel(nn.Module):
 
         # Get candidate span
         sentence_indices = sentence_map  # [num tokens]
-        candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
-        candidate_ends = candidate_starts + torch.arange(0, self.max_span_width, device=device)
-        candidate_start_sent_idx = sentence_indices[candidate_starts]
-        candidate_end_sent_idx = sentence_indices[torch.min(candidate_ends, torch.tensor(num_words - 1, device=device))]
-        candidate_mask = (candidate_ends < num_words) & (candidate_start_sent_idx == candidate_end_sent_idx)
-        candidate_starts, candidate_ends = candidate_starts[candidate_mask], candidate_ends[candidate_mask]  # [num valid candidates]
+        candidate_starts = gold_sg_starts
+        candidate_ends = gold_sg_ends
+        span_width = candidate_ends - candidate_starts
+        candidate_starts = candidate_starts[span_width < conf['max_span_width']]
+        candidate_ends = candidate_ends[span_width < conf['max_span_width']]
+
+        # candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
+        # candidate_ends = candidate_starts + torch.arange(0, self.max_span_width, device=device)
+        # candidate_start_sent_idx = sentence_indices[candidate_starts]
+        # candidate_end_sent_idx = sentence_indices[torch.min(candidate_ends, torch.tensor(num_words - 1, device=device))]
+        # candidate_mask = (candidate_ends < num_words) & (candidate_start_sent_idx == candidate_end_sent_idx)
+        # candidate_starts, candidate_ends = candidate_starts[candidate_mask], candidate_ends[candidate_mask]  # [num valid candidates]
+
         num_candidates = candidate_starts.shape[0]
 
         # Get candidate labels
         if do_loss:
+            # same_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
+            # same_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
+            # same_span = (same_start & same_end).to(torch.long)
+            # gold_sg_cluster_map = gold_sg_cluster_map[span_width < conf['max_span_width']]
+            # candidate_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_span.to(torch.float))
+            # candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0)  # [num candidates]; non-gold span has label 0
+
             same_start = (torch.unsqueeze(gold_starts, 1) == torch.unsqueeze(candidate_starts, 0))
             same_end = (torch.unsqueeze(gold_ends, 1) == torch.unsqueeze(candidate_ends, 0))
             same_span = (same_start & same_end).to(torch.long)
             candidate_labels = torch.matmul(torch.unsqueeze(gold_mention_cluster_map, 0).to(torch.float), same_span.to(torch.float))
-            candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0)  # [num candidates]; non-gold span has label 0
+            candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0)
 
         # Get span embedding
         span_start_emb, span_end_emb = mention_doc[candidate_starts], mention_doc[candidate_ends]
@@ -171,9 +188,10 @@ class CorefModel(nn.Module):
             candidate_mention_scores += candidate_width_score
 
         # Extract top spans
+        # logger.info(f'Mention score size: {candidate_mention_scores.shape}')
         candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
         candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
-        num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words))
+        num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
         selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
         assert len(selected_idx_cpu) == num_top_spans
         selected_idx = torch.tensor(selected_idx_cpu, device=device)
