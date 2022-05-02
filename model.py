@@ -67,7 +67,10 @@ class CorefModel(nn.Module):
         self.update_steps = 0  # Internal use for debug
         self.debug = True
 
-        self.ms = self.make_embedding(1)  # Set a initial value for the score of all mentions
+        if self.config['model_type'] == 'fast':
+            emb = torch.rand(1, requires_grad=True)
+            # init.normal_(emb, std=0.02)
+            self.ms_weight = emb  # Set a initial value for the score of all mentions
 
     def make_embedding(self, dict_size, std=0.02):
         emb = nn.Embedding(dict_size, self.config['feature_emb_size'])
@@ -135,24 +138,10 @@ class CorefModel(nn.Module):
         candidate_starts = candidate_starts[span_width < conf['max_span_width']]
         candidate_ends = candidate_ends[span_width < conf['max_span_width']]
 
-        # candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
-        # candidate_ends = candidate_starts + torch.arange(0, self.max_span_width, device=device)
-        # candidate_start_sent_idx = sentence_indices[candidate_starts]
-        # candidate_end_sent_idx = sentence_indices[torch.min(candidate_ends, torch.tensor(num_words - 1, device=device))]
-        # candidate_mask = (candidate_ends < num_words) & (candidate_start_sent_idx == candidate_end_sent_idx)
-        # candidate_starts, candidate_ends = candidate_starts[candidate_mask], candidate_ends[candidate_mask]  # [num valid candidates]
-
         num_candidates = candidate_starts.shape[0]
 
         # Get candidate labels
         if do_loss:
-            # same_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
-            # same_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
-            # same_span = (same_start & same_end).to(torch.long)
-            # gold_sg_cluster_map = gold_sg_cluster_map[span_width < conf['max_span_width']]
-            # candidate_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_span.to(torch.float))
-            # candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0)  # [num candidates]; non-gold span has label 0
-
             same_start = (torch.unsqueeze(gold_starts, 1) == torch.unsqueeze(candidate_starts, 0))
             same_end = (torch.unsqueeze(gold_ends, 1) == torch.unsqueeze(candidate_ends, 0))
             same_span = (same_start & same_end).to(torch.long)
@@ -181,24 +170,40 @@ class CorefModel(nn.Module):
         candidate_span_emb = torch.cat(candidate_emb_list, dim=1)  # [num candidates, new emb size]
 
         # Get span score
-        candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
-        if conf['use_width_prior']:
-            width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
-            candidate_width_score = width_score[candidate_width_idx]
-            candidate_mention_scores += candidate_width_score
+        if conf['model_type'] == 'fast':
+            num_span = candidate_span_emb.shape[0]
+            candidate_mention_scores = self.ms_weight.expand(num_span).to(device)
+        else:
+            candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
+            if conf['use_width_prior']:
+                width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
+                candidate_width_score = width_score[candidate_width_idx]
+                candidate_mention_scores += candidate_width_score
 
         # Extract top spans
-        # logger.info(f'Mention score size: {candidate_mention_scores.shape}')
-        candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
-        candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
-        num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
-        selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
-        assert len(selected_idx_cpu) == num_top_spans
-        selected_idx = torch.tensor(selected_idx_cpu, device=device)
-        top_span_starts, top_span_ends = candidate_starts[selected_idx], candidate_ends[selected_idx]
-        top_span_emb = candidate_span_emb[selected_idx]
-        top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
-        top_span_mention_scores = candidate_mention_scores[selected_idx]
+        if conf['model_type'] == 'fast':
+            selected_idx_cpu = candidate_mention_scores.nonzero().flatten().tolist()
+            candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
+            num_top_spans = len(candidate_starts_cpu)
+            assert len(selected_idx_cpu) == num_top_spans
+            top_span_starts, top_span_ends = candidate_starts, candidate_ends
+            top_antecedent_idx = top_span_starts
+            selected_idx = torch.tensor(selected_idx_cpu, device=device)
+            top_span_emb = candidate_span_emb[selected_idx]
+            top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
+            top_span_mention_scores = candidate_mention_scores[selected_idx]
+        else:
+            candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
+            candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
+            num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
+            selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
+            assert len(selected_idx_cpu) == num_top_spans
+            selected_idx = torch.tensor(selected_idx_cpu, device=device)
+            top_span_starts, top_span_ends = candidate_starts[selected_idx], candidate_ends[selected_idx]
+            top_span_emb = candidate_span_emb[selected_idx]
+            top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
+            top_span_mention_scores = candidate_mention_scores[selected_idx]
+
 
         # Coarse pruning on each mention's antecedents
         max_top_antecedents = min(num_top_spans, conf['max_top_antecedents'])

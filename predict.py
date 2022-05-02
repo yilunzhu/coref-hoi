@@ -44,6 +44,7 @@ if __name__ == '__main__':
                         help='Path to custom input from file; input from console by default')
     parser.add_argument('--output_path', type=str, default=None,
                         help='Path to save output')
+    parser.add_argument('--flag', type=str, default='sg_pred')
     args = parser.parse_args()
 
     runner = Runner(args.config_name, args.gpu_id)
@@ -52,10 +53,17 @@ if __name__ == '__main__':
 
     if args.jsonlines_path:
         # Input from file
+        # data/ontonotes/dev.english.512.jsonlines
+        file_field = args.jsonlines_path.split('/')[-1].split('.')
+        file_field[0] += f'_{args.flag}'
+        sg_jsonlines_path = '/'.join(args.jsonlines_path.split('/')[:-2]) + '/' + f'ontonotes_{args.flag}' + '/' + '.'.join(file_field)
         with open(args.jsonlines_path, 'r') as f:
             lines = f.readlines()
+        with open(sg_jsonlines_path, 'r') as f:
+            sg_lines = f.readlines()
         docs = [json.loads(line) for line in lines]
-        tensor_examples, stored_info = data_processor.get_tensor_examples_from_custom_input(docs)
+        sg_docs = [json.loads(line) for line in sg_lines]
+        tensor_examples, stored_info = data_processor.get_tensor_examples_from_custom_input(docs, sg_docs)
         predicted_clusters, _, _ = runner.predict(model, tensor_examples)
 
         if args.output_path:

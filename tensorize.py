@@ -23,10 +23,10 @@ class CorefDataProcessor:
         self.tokenizer = util.get_tokenizer(config['bert_tokenizer_name'])
         self.tensor_samples, self.stored_info = None, None  # For dataset samples; lazy loading
 
-    def get_tensor_examples_from_custom_input(self, samples):
+    def get_tensor_examples_from_custom_input(self, samples, sg_samples):
         """ For interactive samples; no caching """
         tensorizer = Tensorizer(self.config, self.tokenizer)
-        tensor_samples = [tensorizer.tensorize_example(sample, False) for sample in samples]
+        tensor_samples = [tensorizer.tensorize_example(samples[i], sg_samples[i], False) for i in range(len(samples))]
         tensor_samples = [(doc_key, self.convert_to_torch_tensor(*tensor)) for doc_key, tensor in tensor_samples]
         return tensor_samples, tensorizer.stored_info
 
