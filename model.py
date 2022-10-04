@@ -55,6 +55,8 @@ class CorefModel(nn.Module):
 
         self.mention_token_attn = self.make_ffnn(self.bert_emb_size, 0, output_size=1) if config['model_heads'] else None
         self.span_emb_score_ffnn = self.make_ffnn(self.span_emb_size, [config['ffnn_size']] * config['ffnn_depth'], output_size=1)
+        self.span_emb_sg_score_ffnn = self.make_ffnn(self.span_emb_size, [config['ffnn_size']] * config['ffnn_depth'], output_size=1)
+
         self.span_width_score_ffnn = self.make_ffnn(config['feature_emb_size'], [config['ffnn_size']] * config['ffnn_depth'], output_size=1) if config['use_width_prior'] else None
         self.coarse_bilinear = self.make_ffnn(self.span_emb_size, 0, output_size=self.span_emb_size)
         self.antecedent_distance_score_ffnn = self.make_ffnn(config['feature_emb_size'], 0, output_size=1) if config['use_distance_prior'] else None
@@ -132,8 +134,17 @@ class CorefModel(nn.Module):
 
         # Get candidate span
         sentence_indices = sentence_map  # [num tokens]
-        candidate_starts = gold_sg_starts
-        candidate_ends = gold_sg_ends
+        candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
+        candidate_ends = candidate_starts + torch.arange(0, self.max_span_width, device=device)
+        candidate_start_sent_idx = sentence_indices[candidate_starts]
+        candidate_end_sent_idx = sentence_indices[torch.min(candidate_ends, torch.tensor(num_words - 1, device=device))]
+        candidate_mask = (candidate_ends < num_words) & (candidate_start_sent_idx == candidate_end_sent_idx)
+        candidate_starts, candidate_ends = candidate_starts[candidate_mask], candidate_ends[candidate_mask]  # [num valid candidates]
+
+        """use gold singleton boundaries"""
+        # candidate_starts = gold_sg_starts
+        # candidate_ends = gold_sg_ends
+
         span_width = candidate_ends - candidate_starts
         candidate_starts = candidate_starts[span_width < conf['max_span_width']]
         candidate_ends = candidate_ends[span_width < conf['max_span_width']]
@@ -147,6 +158,12 @@ class CorefModel(nn.Module):
             same_span = (same_start & same_end).to(torch.long)
             candidate_labels = torch.matmul(torch.unsqueeze(gold_mention_cluster_map, 0).to(torch.float), same_span.to(torch.float))
             candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0)
+
+            same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
+            same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
+            same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
+            sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
+            sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
 
         # Get span embedding
         span_start_emb, span_end_emb = mention_doc[candidate_starts], mention_doc[candidate_ends]
@@ -175,10 +192,12 @@ class CorefModel(nn.Module):
             candidate_mention_scores = self.ms_weight.expand(num_span).to(device)
         else:
             candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
+            candidate_sg_scores = torch.squeeze(self.span_emb_sg_score_ffnn(candidate_span_emb), 1)
             if conf['use_width_prior']:
                 width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
                 candidate_width_score = width_score[candidate_width_idx]
                 candidate_mention_scores += candidate_width_score
+                candidate_sg_scores += candidate_width_score
 
         # Extract top spans
         if conf['model_type'] == 'fast':
@@ -192,6 +211,7 @@ class CorefModel(nn.Module):
             top_span_emb = candidate_span_emb[selected_idx]
             top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
             top_span_mention_scores = candidate_mention_scores[selected_idx]
+            # top_span_sg_scores = candidate_sg_scores[selected_idx]
         else:
             candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
             candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
@@ -203,6 +223,8 @@ class CorefModel(nn.Module):
             top_span_emb = candidate_span_emb[selected_idx]
             top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
             top_span_mention_scores = candidate_mention_scores[selected_idx]
+            top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
+            top_span_sg_scores = candidate_sg_scores[selected_idx]
 
 
         # Coarse pruning on each mention's antecedents
@@ -211,10 +233,11 @@ class CorefModel(nn.Module):
         antecedent_offsets = torch.unsqueeze(top_span_range, 1) - torch.unsqueeze(top_span_range, 0)
         antecedent_mask = (antecedent_offsets >= 1)
         pairwise_mention_score_sum = torch.unsqueeze(top_span_mention_scores, 1) + torch.unsqueeze(top_span_mention_scores, 0)
+        pairwise_sg_score_sum = torch.unsqueeze(top_span_sg_scores, 1) + torch.unsqueeze(top_span_sg_scores, 0)
         source_span_emb = self.dropout(self.coarse_bilinear(top_span_emb))
         target_span_emb = self.dropout(torch.transpose(top_span_emb, 0, 1))
         pairwise_coref_scores = torch.matmul(source_span_emb, target_span_emb)
-        pairwise_fast_scores = pairwise_mention_score_sum + pairwise_coref_scores
+        pairwise_fast_scores = pairwise_mention_score_sum - conf["sg_score_coef"] * (1 - pairwise_sg_score_sum) + pairwise_coref_scores
         pairwise_fast_scores += torch.log(antecedent_mask.to(torch.float))
         if conf['use_distance_prior']:
             distance_score = torch.squeeze(self.antecedent_distance_score_ffnn(self.dropout(self.emb_antecedent_distance_prior.weight)), 1)
@@ -322,12 +345,19 @@ class CorefModel(nn.Module):
             loss = torch.sum(slack_hinge * delta)
 
         # Add mention loss
-        if conf['mention_loss_coef']:
-            gold_mention_scores = top_span_mention_scores[top_span_cluster_ids > 0]
-            non_gold_mention_scores = top_span_mention_scores[top_span_cluster_ids == 0]
-            loss_mention = -torch.sum(torch.log(torch.sigmoid(gold_mention_scores))) * conf['mention_loss_coef']
-            loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_mention_scores))) * conf['mention_loss_coef']
-            loss += loss_mention
+        # if conf['mention_loss_coef']:
+        gold_mention_scores = top_span_mention_scores[top_span_cluster_ids > 0]
+        non_gold_mention_scores = top_span_mention_scores[top_span_cluster_ids == 0]
+        loss_mention = -torch.sum(torch.log(torch.sigmoid(gold_mention_scores))) * conf['mention_loss_coef']
+        loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_mention_scores))) * conf['mention_loss_coef']
+
+        # add singleton loss
+        gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
+        non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
+        loss_mention += -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) * conf['sg_loss_coef']
+        loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores))) * conf['sg_loss_coef']
+
+        loss += loss_mention
 
         if conf['higher_order'] == 'cluster_merging':
             top_pairwise_scores += cluster_merging_scores

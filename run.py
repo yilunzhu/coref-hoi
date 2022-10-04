@@ -15,6 +15,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from model import CorefModel
 import conll
 import sys
+from argparse import ArgumentParser
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -193,7 +194,7 @@ class Runner:
 
         model.eval()
         for i, (doc_key, tensor_example) in enumerate(tensor_examples):
-            tensor_example = tensor_example[:7]
+            tensor_example = tensor_example[:9]
             example_gpu = [d.to(self.device) for d in tensor_example]
             with torch.no_grad():
                 _, _, _, span_starts, span_ends, antecedent_idx, antecedent_scores = model(*example_gpu)
@@ -284,8 +285,12 @@ class Runner:
 
 
 if __name__ == '__main__':
-    config_name, gpu_id = sys.argv[1], int(sys.argv[2])
-    runner = Runner(config_name, gpu_id)
+    parser = ArgumentParser()
+    parser.add_argument("--config", default="train_spanbert_large_ml0_d2")
+    parser.add_argument("--gpu", type=int)
+    args = parser.parse_args()
+    # config_name, gpu_id = sys.argv[1], int(sys.argv[2])
+    runner = Runner(args.config, args.gpu)
     model = runner.initialize_model()
 
     runner.train(model)
