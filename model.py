@@ -237,7 +237,8 @@ class CorefModel(nn.Module):
         source_span_emb = self.dropout(self.coarse_bilinear(top_span_emb))
         target_span_emb = self.dropout(torch.transpose(top_span_emb, 0, 1))
         pairwise_coref_scores = torch.matmul(source_span_emb, target_span_emb)
-        pairwise_fast_scores = pairwise_mention_score_sum - conf["sg_score_coef"] * (1 - pairwise_sg_score_sum) + pairwise_coref_scores
+        pairwise_fast_scores = (1 - conf["sg_score_coef"]) * pairwise_mention_score_sum - conf["sg_score_coef"] * (1 - pairwise_sg_score_sum)
+        pairwise_fast_scores += pairwise_coref_scores
         pairwise_fast_scores += torch.log(antecedent_mask.to(torch.float))
         if conf['use_distance_prior']:
             distance_score = torch.squeeze(self.antecedent_distance_score_ffnn(self.dropout(self.emb_antecedent_distance_prior.weight)), 1)
@@ -328,7 +329,7 @@ class CorefModel(nn.Module):
         if conf['loss_type'] == 'marginalized':
             log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1)
             log_norm = torch.logsumexp(top_antecedent_scores, dim=1)
-            loss = torch.sum(log_norm - log_marginalized_antecedent_scores)
+            loss = (1 - conf['sg_loss_coef']) * torch.sum(log_norm - log_marginalized_antecedent_scores)
         elif conf['loss_type'] == 'hinge':
             top_antecedent_mask = torch.cat([torch.ones(num_top_spans, 1, dtype=torch.bool, device=device), top_antecedent_mask], dim=1)
             top_antecedent_scores += torch.log(top_antecedent_mask.to(torch.float))
