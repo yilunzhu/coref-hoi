@@ -237,7 +237,7 @@ class CorefModel(nn.Module):
         source_span_emb = self.dropout(self.coarse_bilinear(top_span_emb))
         target_span_emb = self.dropout(torch.transpose(top_span_emb, 0, 1))
         pairwise_coref_scores = torch.matmul(source_span_emb, target_span_emb)
-        pairwise_fast_scores = (1 - conf["sg_score_coef"]) * pairwise_mention_score_sum - conf["sg_score_coef"] * (1 - pairwise_sg_score_sum)
+        pairwise_fast_scores = (1 - conf["sg_score_coef"]) * pairwise_mention_score_sum + conf["sg_score_coef"] * pairwise_sg_score_sum
         pairwise_fast_scores += pairwise_coref_scores
         pairwise_fast_scores += torch.log(antecedent_mask.to(torch.float))
         if conf['use_distance_prior']:
@@ -380,7 +380,7 @@ class CorefModel(nn.Module):
                 if conf['mention_loss_coef']:
                     logger.info('mention loss: %.4f' % loss_mention)
                 if conf['loss_type'] == 'marginalized':
-                    logger.info('norm/gold: %.4f/%.4f' % (torch.sum(log_norm), torch.sum(log_marginalized_antecedent_scores)))
+                    logger.info('norm/gold: %.4f/%.4f; loss: %.4f' % (torch.sum(log_norm), torch.sum(log_marginalized_antecedent_scores), loss))
                 else:
                     logger.info('loss: %.4f' % loss)
         self.update_steps += 1
