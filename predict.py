@@ -48,7 +48,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     runner = Runner(args.config_name, args.gpu_id)
-    # model = runner.initialize_model(args.model_identifier)
+    model = runner.initialize_model(args.model_identifier)
     data_processor = CorefDataProcessor(runner.config)
 
     if args.jsonlines_path:

@@ -144,10 +144,9 @@ class CorefModel(nn.Module):
         """use gold singleton boundaries"""
         # candidate_starts = gold_sg_starts
         # candidate_ends = gold_sg_ends
-
-        span_width = candidate_ends - candidate_starts
-        candidate_starts = candidate_starts[span_width < conf['max_span_width']]
-        candidate_ends = candidate_ends[span_width < conf['max_span_width']]
+        # span_width = candidate_ends - candidate_starts
+        # candidate_starts = candidate_starts[span_width < conf['max_span_width']]
+        # candidate_ends = candidate_ends[span_width < conf['max_span_width']]
 
         num_candidates = candidate_starts.shape[0]
 
@@ -157,7 +156,7 @@ class CorefModel(nn.Module):
             same_end = (torch.unsqueeze(gold_ends, 1) == torch.unsqueeze(candidate_ends, 0))
             same_span = (same_start & same_end).to(torch.long)
             candidate_labels = torch.matmul(torch.unsqueeze(gold_mention_cluster_map, 0).to(torch.float), same_span.to(torch.float))
-            candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0)
+            candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0) # [num candidates]; non-gold span has label 0
 
             same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
             same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
@@ -197,7 +196,7 @@ class CorefModel(nn.Module):
                 width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
                 candidate_width_score = width_score[candidate_width_idx]
                 candidate_mention_scores += candidate_width_score
-                candidate_sg_scores += candidate_width_score
+                # candidate_sg_scores += candidate_width_score
 
         # Extract top spans
         if conf['model_type'] == 'fast':
@@ -346,19 +345,20 @@ class CorefModel(nn.Module):
             loss = torch.sum(slack_hinge * delta)
 
         # Add mention loss
-        # if conf['mention_loss_coef']:
-        gold_mention_scores = top_span_mention_scores[top_span_cluster_ids > 0]
-        non_gold_mention_scores = top_span_mention_scores[top_span_cluster_ids == 0]
-        loss_mention = -torch.sum(torch.log(torch.sigmoid(gold_mention_scores))) * conf['mention_loss_coef']
-        loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_mention_scores))) * conf['mention_loss_coef']
+        if conf['mention_loss_coef']:
+            gold_mention_scores = top_span_mention_scores[top_span_cluster_ids > 0]
+            non_gold_mention_scores = top_span_mention_scores[top_span_cluster_ids == 0]
+            loss_mention = -torch.sum(torch.log(torch.sigmoid(gold_mention_scores))) * conf['mention_loss_coef']
+            loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_mention_scores))) * conf['mention_loss_coef']
+            loss += loss_mention
 
-        # add singleton loss
-        gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
-        non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
-        loss_mention += -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) * conf['sg_loss_coef']
-        loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores))) * conf['sg_loss_coef']
-
-        loss += loss_mention
+        # Add singleton loss
+        if conf['sg_loss_coef']:
+            gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
+            non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
+            loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) * conf['sg_loss_coef']
+            loss_sg += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores))) * conf['sg_loss_coef']
+            loss += loss_sg
 
         if conf['higher_order'] == 'cluster_merging':
             top_pairwise_scores += cluster_merging_scores
@@ -443,7 +443,9 @@ class CorefModel(nn.Module):
         for i, predicted_idx in enumerate(predicted_antecedents):
             if predicted_idx < 0:
                 continue
-            assert i > predicted_idx, f'span idx: {i}; antecedent idx: {predicted_idx}'
+            # assert i > predicted_idx, f'span idx: {i}; antecedent idx: {predicted_idx}'
+            if i > predicted_idx:
+                print(f'span idx: {i}; antecedent idx: {predicted_idx}')
             # Check antecedent's cluster
             antecedent = (int(span_starts[predicted_idx]), int(span_ends[predicted_idx]))
             antecedent_cluster_id = mention_to_cluster_id.get(antecedent, -1)
