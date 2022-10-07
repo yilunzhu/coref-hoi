@@ -443,9 +443,7 @@ class CorefModel(nn.Module):
         for i, predicted_idx in enumerate(predicted_antecedents):
             if predicted_idx < 0:
                 continue
-            # assert i > predicted_idx, f'span idx: {i}; antecedent idx: {predicted_idx}'
-            if i > predicted_idx:
-                print(f'span idx: {i}; antecedent idx: {predicted_idx}')
+            assert i > predicted_idx, f'span idx: {i}; antecedent idx: {predicted_idx}'
             # Check antecedent's cluster
             antecedent = (int(span_starts[predicted_idx]), int(span_ends[predicted_idx]))
             antecedent_cluster_id = mention_to_cluster_id.get(antecedent, -1)
