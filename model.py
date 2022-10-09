@@ -238,6 +238,7 @@ class CorefModel(nn.Module):
         target_span_emb = self.dropout(torch.transpose(top_span_emb, 0, 1))
         pairwise_coref_scores = torch.matmul(source_span_emb, target_span_emb)
         pairwise_fast_scores = pairwise_mention_score_sum - conf["sg_score_coef"] * (1 - pairwise_sg_score_sum)
+        # pairwise_fast_scores = (1 - conf["sg_score_coef"]) * pairwise_mention_score_sum + conf["sg_score_coef"] * pairwise_sg_score_sum
         pairwise_fast_scores += pairwise_coref_scores
         pairwise_fast_scores += torch.log(antecedent_mask.to(torch.float))
         if conf['use_distance_prior']:
