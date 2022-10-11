@@ -17,6 +17,7 @@ import conll
 import sys
 from argparse import ArgumentParser
 
+random.seed(42)
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
@@ -164,7 +165,7 @@ class Runner:
         model.eval()
         for i, (doc_key, tensor_example) in enumerate(tensor_examples):
             gold_clusters = stored_info['gold'][doc_key]
-            tensor_example = list(tensor_example[:9])  # Strip out gold
+            tensor_example = list(tensor_example[:10])  # Strip out gold
             example_gpu = [d.to(self.device) for d in tensor_example]
             with torch.no_grad():
                 _, _, _, span_starts, span_ends, antecedent_idx, antecedent_scores = model(*example_gpu)

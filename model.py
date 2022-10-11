@@ -113,8 +113,8 @@ class CorefModel(nn.Module):
         return self.get_predictions_and_loss(*input)
 
     def get_predictions_and_loss(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
-                                 is_training, gold_sg_starts=None, gold_sg_ends=None, gold_starts=None, gold_ends=None,
-                                 gold_mention_cluster_map=None, gold_sg_cluster_map=None):
+                                 is_training, gold_sg_starts=None, gold_sg_ends=None, gold_sg_cluster_map=None,
+                                 gold_starts=None, gold_ends=None, gold_mention_cluster_map=None):
         """ Model and input are already on the device """
         device = self.device
         conf = self.config

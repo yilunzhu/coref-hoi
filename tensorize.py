@@ -191,7 +191,7 @@ class Tensorizer:
         gold_starts, gold_ends = self._tensorize_spans(gold_mentions)
         gold_sg_starts, gold_sg_ends = self._tensorize_spans(gold_singletons)
         example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                          gold_sg_starts, gold_sg_ends, gold_starts, gold_ends, gold_mention_cluster_map, gold_sg_cluster_map)
+                          gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_mention_cluster_map)
 
         if is_training and len(sentences) > self.config['max_training_sentences']:
             return doc_key, self.truncate_example(*example_tensor)
@@ -199,7 +199,7 @@ class Tensorizer:
             return doc_key, example_tensor
 
     def truncate_example(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                         gold_sg_starts, gold_sg_ends, gold_starts, gold_ends, gold_mention_cluster_map, gold_sg_cluster_map,
+                         gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_mention_cluster_map,
                          sentence_offset=None):
         max_sentences = self.config["max_training_sentences"]
         num_sentences = input_ids.shape[0]
