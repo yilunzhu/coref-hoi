@@ -74,8 +74,8 @@ class CorefDataProcessor:
 
     @classmethod
     def convert_to_torch_tensor(cls, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
-                                is_training, gold_sg_starts, gold_sg_ends, gold_starts, gold_ends,
-                                gold_mention_cluster_map, gold_sg_cluster_map):
+                                is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map,
+                                gold_starts, gold_ends, gold_mention_cluster_map):
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         input_mask = torch.tensor(input_mask, dtype=torch.long)
         speaker_ids = torch.tensor(speaker_ids, dtype=torch.long)
@@ -90,8 +90,8 @@ class CorefDataProcessor:
         gold_mention_cluster_map = torch.tensor(gold_mention_cluster_map, dtype=torch.long)
         gold_sg_cluster_map = torch.tensor(gold_sg_cluster_map, dtype=torch.long)
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
-               is_training, gold_sg_starts, gold_sg_ends, gold_starts, gold_ends, \
-               gold_mention_cluster_map, gold_sg_cluster_map
+               is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, \
+               gold_starts, gold_ends, gold_mention_cluster_map,
 
     def get_cache_path(self):
         cache_path = join(self.data_dir, f'cached.tensors.{self.language}.{self.max_seg_len}.{self.max_training_seg}.bin')
@@ -228,4 +228,4 @@ class Tensorizer:
         gold_sg_cluster_map = gold_sg_cluster_map[gold_sg_spans]
 
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
-               is_training, gold_sg_starts, gold_sg_ends, gold_starts, gold_ends, gold_mention_cluster_map, gold_sg_cluster_map
+               is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_mention_cluster_map

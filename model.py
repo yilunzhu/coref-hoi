@@ -200,7 +200,7 @@ class CorefModel(nn.Module):
             if conf['sg_type'] == 'ffnn':
                 candidate_sg_scores = torch.squeeze(self.span_emb_sg_score_ffnn(candidate_span_emb), 1)
             elif conf['sg_type'] == 'hard_encode':
-                candidate_sg_scores = (sg_labels>0).float()
+                candidate_sg_scores = (sg_labels>0).to(torch.float)
             else:
                 raise ValueError('Unsupported sg_type, selected from ["ffnn", "hard_encode"]')
             if conf['use_width_prior']:
