@@ -163,6 +163,12 @@ class CorefModel(nn.Module):
             same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
             sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
             sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
+        elif conf['hard_encode']:
+            same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
+            same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
+            same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
+            sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
+            sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
 
         # Get span embedding
         span_start_emb, span_end_emb = mention_doc[candidate_starts], mention_doc[candidate_ends]
