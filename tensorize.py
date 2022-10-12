@@ -38,9 +38,13 @@ class CorefDataProcessor:
             self.tensor_samples = {}
             tensorizer = Tensorizer(self.config, self.tokenizer)
             paths = {
+                'trn': None,
+                'dev': None,
                 'tst': join(self.data_dir, self.dataset, f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
+                'trn': None,
+                'dev': None,
                 'tst': join(self.data_dir, self.dataset + '_' + self.config["singleton_suffix"], f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
             }
             for split, path in paths.items():
