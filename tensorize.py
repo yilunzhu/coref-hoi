@@ -38,13 +38,9 @@ class CorefDataProcessor:
             self.tensor_samples = {}
             tensorizer = Tensorizer(self.config, self.tokenizer)
             paths = {
-                'trn': None,
-                'dev': None,
                 'tst': join(self.data_dir, self.dataset, f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
-                'trn': None,
-                'dev': None,
                 'tst': join(self.data_dir, self.dataset + '_' + self.config["singleton_suffix"], f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
             }
             for split, path in paths.items():
@@ -96,7 +92,7 @@ class CorefDataProcessor:
             # Cache tensorized samples
             with open(cache_path, 'wb') as f:
                 pickle.dump((self.tensor_samples, self.stored_info), f)
-        return self.tensor_samples['trn'], self.tensor_samples['dev'], self.tensor_samples['tst']
+        return self.tensor_samples['trn'] if 'trn' in self.tensor_samples else None, self.tensor_samples['dev'] if 'dev' in self.tensor_samples else None, self.tensor_samples['tst']
 
     def get_stored_info(self):
         return self.stored_info
