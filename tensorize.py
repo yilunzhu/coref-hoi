@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class CorefDataProcessor:
-    def __init__(self, config, language='english'):
+    def __init__(self, config, dataset='ontonotes', language='english'):
         self.config = config
+        self.dataset = dataset
         self.language = language
 
         self.max_seg_len = config['max_segment_len']
@@ -33,6 +34,30 @@ class CorefDataProcessor:
     def get_tensor_examples(self):
         """ For dataset samples """
         cache_path = self.get_cache_path()
+        if self.dataset != 'ontonotes':
+            self.tensor_samples = {}
+            tensorizer = Tensorizer(self.config, self.tokenizer)
+            paths = {
+                'tst': join(self.data_dir, self.dataset, f'test.{self.language}.{self.max_seg_len}.jsonlines')
+            }
+            singleton_paths = {
+                'tst': join(self.data_dir, self.dataset + '_' + self.config["singleton_suffix"], f'test_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines')
+            }
+            for split, path in paths.items():
+                logger.info('Tensorizing examples from %s; results will be cached)' % path)
+                is_training = (split == 'trn')
+                sg_path = singleton_paths[split]
+                with open(path, 'r') as f:
+                    samples = [json.loads(line) for line in f.readlines()]
+                with open(sg_path, 'r') as f:
+                    sg_samples = [json.loads(line) for line in f.readlines()]
+                tensor_samples = [tensorizer.tensorize_example(samples[i], sg_samples[i], is_training) for i in range(len(samples))]
+                self.tensor_samples[split] = [(doc_key, self.convert_to_torch_tensor(*tensor)) for doc_key, tensor
+                                              in tensor_samples]
+            self.stored_info = tensorizer.stored_info
+            # Cache tensorized samples
+            with open(cache_path, 'wb') as f:
+                pickle.dump((self.tensor_samples, self.stored_info), f)
         if os.path.exists(cache_path):
             # Load cached tensors if exists
             with open(cache_path, 'rb') as f:
@@ -94,7 +119,7 @@ class CorefDataProcessor:
                gold_starts, gold_ends, gold_mention_cluster_map,
 
     def get_cache_path(self):
-        cache_path = join(self.data_dir, f'cached.tensors.{self.language}.{self.max_seg_len}.{self.max_training_seg}.bin')
+        cache_path = join(self.data_dir, f'cached.tensors.{self.dataset}.{self.language}.{self.max_seg_len}.{self.max_training_seg}.bin')
         return cache_path
 
 
