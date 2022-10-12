@@ -4,7 +4,7 @@ from run import Runner
 import sys
 from argparse import ArgumentParser
 
-def evaluate(config_name, gpu_id, saved_suffix, dataset):
+def evaluate(config_name, gpu_id, saved_suffix, dataset, conll_test_path):
     runner = Runner(config_name, gpu_id, dataset)
     model = runner.initialize_model(saved_suffix)
 
@@ -13,7 +13,7 @@ def evaluate(config_name, gpu_id, saved_suffix, dataset):
 
     # runner.evaluate(model, examples_dev, stored_info, 0, official=True, conll_path=runner.config['conll_eval_path'])  # Eval dev
     # print('=================================')
-    runner.evaluate(model, examples_test, stored_info, 0, official=True, conll_path=runner.config['conll_test_path'])  # Eval test
+    runner.evaluate(model, examples_test, stored_info, 0, official=True, conll_path=conll_test_path)  # Eval test
 
 
 if __name__ == '__main__':
@@ -25,4 +25,4 @@ if __name__ == '__main__':
     parser.add_argument("--conll_path", default="./data/ontogum/test.gum.english.v4_gold_conll")
     args = parser.parse_args()
 
-    evaluate(args.config, args.gpu, args.checkpoint, args.dataset)
+    evaluate(args.config, args.gpu, args.checkpoint, args.dataset, args.conll_path)
