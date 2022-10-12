@@ -1,3 +1,5 @@
+import os.path
+
 from run import Runner
 import sys
 from argparse import ArgumentParser
@@ -20,6 +22,7 @@ if __name__ == '__main__':
     parser.add_argument("--checkpoint")
     parser.add_argument("--gpu", default=0, type=int)
     parser.add_argument("--dataset", default="ontonotes", help="Select from ['ontonotes', 'ontogum']")
+    parser.add_argument("--conll_path", default="./data/ontogum/test.gum.english.v4_gold_conll")
     args = parser.parse_args()
 
     evaluate(args.config, args.gpu, args.checkpoint, args.dataset)
