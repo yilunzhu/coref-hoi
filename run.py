@@ -48,7 +48,7 @@ class Runner:
         self.device = torch.device('cpu' if gpu_id < 0 else f'cuda:{gpu_id}')
 
         # Set up data
-        self.data = CorefDataProcessor(self.config)
+        self.data = CorefDataProcessor(self.config, self.dataset)
 
     def initialize_model(self, saved_suffix=None):
         model = CorefModel(self.config, self.device)
