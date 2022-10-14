@@ -69,13 +69,17 @@ class CorefDataProcessor:
             tensorizer = Tensorizer(self.config, self.tokenizer)
             paths = {
                 'trn': join(self.data_dir, self.config['dataset'], f'train.{self.language}.{self.max_seg_len}.jsonlines'),
-                'dev': join(self.data_dir, self.config['dataset'], f'dev.{self.language}.{self.max_seg_len}.jsonlines'),
-                'tst': join(self.data_dir, self.config['dataset'], f'test.{self.language}.{self.max_seg_len}.jsonlines')
+                # 'dev': join(self.data_dir, self.config['dataset'], f'dev.{self.language}.{self.max_seg_len}.jsonlines'),
+                # 'tst': join(self.data_dir, self.config['dataset'], f'test.{self.language}.{self.max_seg_len}.jsonlines')
+                'dev': join(self.data_dir, 'ontogum', f'test.gum.{self.language}.{self.max_seg_len}.jsonlines'),
+                'tst': join(self.data_dir, 'ontogum', f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
                 'trn': join(self.data_dir, self.config['dataset']+'_sg', f'train_sg.{self.language}.{self.max_seg_len}.jsonlines'),
-                'dev': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'dev_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines'),
-                'tst': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'test_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines')
+                # 'dev': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'dev_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines'),
+                # 'tst': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'test_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines')
+                'dev': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'test.gum.{self.language}.{self.max_seg_len}.jsonlines'),
+                'tst': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
             }
             for split, path in paths.items():
                 logger.info('Tensorizing examples from %s; results will be cached)' % path)
