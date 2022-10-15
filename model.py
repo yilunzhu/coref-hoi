@@ -237,20 +237,23 @@ class CorefModel(nn.Module):
             top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
             top_span_sg_scores = candidate_sg_scores[selected_idx]
 
-
         # Coarse pruning on each mention's antecedents
         max_top_antecedents = min(num_top_spans, conf['max_top_antecedents'])
         top_span_range = torch.arange(0, num_top_spans, device=device)
         antecedent_offsets = torch.unsqueeze(top_span_range, 1) - torch.unsqueeze(top_span_range, 0)
         antecedent_mask = (antecedent_offsets >= 1)
         pairwise_mention_score_sum = torch.unsqueeze(top_span_mention_scores, 1) + torch.unsqueeze(top_span_mention_scores, 0)
-        pairwise_sg_score_sum = torch.unsqueeze(top_span_sg_scores, 1) + torch.unsqueeze(top_span_sg_scores, 0)
-        pairwise_sg_score_sum[pairwise_sg_score_sum<0] = 0
         source_span_emb = self.dropout(self.coarse_bilinear(top_span_emb))
         target_span_emb = self.dropout(torch.transpose(top_span_emb, 0, 1))
         pairwise_coref_scores = torch.matmul(source_span_emb, target_span_emb)
-        pairwise_fast_scores = pairwise_mention_score_sum - conf["sg_score_coef"] * (1 - pairwise_sg_score_sum)
-        # pairwise_fast_scores = (1 - conf["sg_score_coef"]) * pairwise_mention_score_sum + conf["sg_score_coef"] * pairwise_sg_score_sum
+
+        if conf['model_type'] == 'fast':
+            pairwise_fast_scores = pairwise_mention_score_sum
+        else:
+            pairwise_sg_score_sum = torch.unsqueeze(top_span_sg_scores, 1) + torch.unsqueeze(top_span_sg_scores, 0)
+            pairwise_sg_score_sum[pairwise_sg_score_sum<0] = 0
+            # pairwise_fast_scores -= conf["sg_score_coef"] * (1 - pairwise_sg_score_sum)
+            pairwise_fast_scores = (1 - conf["sg_score_coef"]) * pairwise_mention_score_sum + conf["sg_score_coef"] * pairwise_sg_score_sum
         pairwise_fast_scores += pairwise_coref_scores
         pairwise_fast_scores += torch.log(antecedent_mask.to(torch.float))
         if conf['use_distance_prior']:
@@ -367,7 +370,7 @@ class CorefModel(nn.Module):
             loss += loss_mention
 
         # Add singleton loss
-        if conf['sg_loss_coef']:
+        if conf['model_type'] != 'fast' and conf['sg_loss_coef']:
             gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
             non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
             loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) * conf['sg_loss_coef']
