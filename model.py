@@ -133,21 +133,22 @@ class CorefModel(nn.Module):
         speaker_ids = speaker_ids[input_mask]
         num_words = mention_doc.shape[0]
 
-        # Get candidate span
-        sentence_indices = sentence_map  # [num tokens]
-        candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
-        candidate_ends = candidate_starts + torch.arange(0, self.max_span_width, device=device)
-        candidate_start_sent_idx = sentence_indices[candidate_starts]
-        candidate_end_sent_idx = sentence_indices[torch.min(candidate_ends, torch.tensor(num_words - 1, device=device))]
-        candidate_mask = (candidate_ends < num_words) & (candidate_start_sent_idx == candidate_end_sent_idx)
-        candidate_starts, candidate_ends = candidate_starts[candidate_mask], candidate_ends[candidate_mask]  # [num valid candidates]
-
         """use gold singleton boundaries"""
-        # candidate_starts = gold_sg_starts
-        # candidate_ends = gold_sg_ends
-        # span_width = candidate_ends - candidate_starts
-        # candidate_starts = candidate_starts[span_width < conf['max_span_width']]
-        # candidate_ends = candidate_ends[span_width < conf['max_span_width']]
+        if conf['model_type'] == 'fast':
+            candidate_starts = gold_sg_starts
+            candidate_ends = gold_sg_ends
+            span_width = candidate_ends - candidate_starts
+            candidate_starts = candidate_starts[span_width < conf['max_span_width']]
+            candidate_ends = candidate_ends[span_width < conf['max_span_width']]
+        else:
+            # Get candidate span
+            sentence_indices = sentence_map  # [num tokens]
+            candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
+            candidate_ends = candidate_starts + torch.arange(0, self.max_span_width, device=device)
+            candidate_start_sent_idx = sentence_indices[candidate_starts]
+            candidate_end_sent_idx = sentence_indices[torch.min(candidate_ends, torch.tensor(num_words - 1, device=device))]
+            candidate_mask = (candidate_ends < num_words) & (candidate_start_sent_idx == candidate_end_sent_idx)
+            candidate_starts, candidate_ends = candidate_starts[candidate_mask], candidate_ends[candidate_mask]  # [num valid candidates]
 
         num_candidates = candidate_starts.shape[0]
 
@@ -159,12 +160,13 @@ class CorefModel(nn.Module):
             candidate_labels = torch.matmul(torch.unsqueeze(gold_mention_cluster_map, 0).to(torch.float), same_span.to(torch.float))
             candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0) # [num candidates]; non-gold span has label 0
 
-            same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
-            same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
-            same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
-            sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
-            sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
-        elif conf['sg_type'] == 'hard_encode':
+            if conf['model_type'] != 'fast':
+                same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
+                same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
+                same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
+                sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
+                sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
+        elif conf['model_type'] != 'fast' and conf['sg_type'] == 'hard_encode':
             same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
             same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
             same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
