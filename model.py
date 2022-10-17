@@ -161,10 +161,11 @@ class CorefModel(nn.Module):
         if use_gold_sg:
             candidate_starts_cpu, candidate_ends_cpu = span_starts.tolist(), span_ends.tolist()
             # remove duplicated spans in gold_sg_spans
-            gold_idx_cpu = self.remove_sg_spans(candidate_starts_cpu, candidate_ends_cpu, pred_starts.tolist(), pred_ends.tolist())
-            candidate_starts_cpu = [candidate_starts_cpu[i] for i in gold_idx_cpu]
-            candidate_ends_cpu = [candidate_ends_cpu[i] for i in gold_idx_cpu]
-            candidate_mention_scores = candidate_mention_scores[gold_idx_cpu]
+            if pred_starts:
+                gold_idx_cpu = self.remove_sg_spans(candidate_starts_cpu, candidate_ends_cpu, pred_starts.tolist(), pred_ends.tolist())
+                candidate_starts_cpu = [candidate_starts_cpu[i] for i in gold_idx_cpu]
+                candidate_ends_cpu = [candidate_ends_cpu[i] for i in gold_idx_cpu]
+                candidate_mention_scores = candidate_mention_scores[gold_idx_cpu]
 
             num_top_spans = len(candidate_starts_cpu)
             selected_idx_cpu = candidate_mention_scores.nonzero().flatten().tolist()
@@ -238,6 +239,7 @@ class CorefModel(nn.Module):
         span_width = candidate_sg_ends - candidate_sg_starts
         candidate_sg_starts = candidate_sg_starts[span_width < conf['max_span_width']]
         candidate_sg_ends = candidate_sg_ends[span_width < conf['max_span_width']]
+        gold_sg_cluster_map = gold_sg_cluster_map[span_width < conf['max_span_width']]
         # else:
         # Get candidate span
         sentence_indices = sentence_map  # [num tokens]
@@ -344,13 +346,17 @@ class CorefModel(nn.Module):
         #     top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
         #     top_span_sg_scores = candidate_sg_scores[selected_idx]
 
-        num_top_spans, top_span_emb, top_span_cluster_ids, candidate_mention_scores, top_span_mention_scores, top_span_starts, top_span_ends = \
-            self.get_mention_scores(mention_doc, gold_starts, gold_ends, gold_mention_cluster_map, candidate_starts, candidate_ends, conf, device, do_loss, use_gold_sg=False)
+        # num_top_spans, top_span_emb, top_span_cluster_ids, candidate_mention_scores, top_span_mention_scores, top_span_starts, top_span_ends = \
+        #     self.get_mention_scores(mention_doc, gold_starts, gold_ends, gold_mention_cluster_map, candidate_starts, candidate_ends, conf, device, do_loss, use_gold_sg=False)
 
         # num_sg_top_spans, top_sg_span_emb, top_sg_span_cluster_ids, candidate_sg_scores, top_sg_span_mention_scores, top_sg_starts, top_sg_ends = \
         #     self.get_mention_scores(mention_doc, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, candidate_sg_starts, candidate_sg_ends, conf, device, do_loss, use_gold_sg=True,
         #                             pred_starts=candidate_starts, pred_ends=candidate_ends)
-        #
+
+        num_top_spans, top_span_emb, top_span_cluster_ids, candidate_mention_scores, top_span_mention_scores, top_span_starts, top_span_ends = \
+            self.get_mention_scores(mention_doc, candidate_sg_starts, candidate_sg_ends, gold_sg_cluster_map, candidate_sg_starts, candidate_sg_ends, conf, device, do_loss, use_gold_sg=True)
+
+
         # if num_sg_top_spans > 0:
         #     num_top_spans += num_sg_top_spans
         #     top_span_emb = torch.cat([top_span_emb, top_sg_span_emb], dim=0)
