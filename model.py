@@ -25,7 +25,7 @@ class CorefModel(nn.Module):
         self.max_seg_len = config['max_segment_len']
         self.max_span_width = config['max_span_width']
         assert config['loss_type'] in ['marginalized', 'hinge']
-        assert config['sg_type'] in ['ffnn', 'hard_encode']
+        # assert config['sg_type'] in ['ffnn', 'hard_encode']
         if config['coref_depth'] > 1 or config['higher_order'] == 'cluster_merging':
             assert config['fine_grained']  # Higher-order is in slow fine-grained scoring
 
@@ -70,10 +70,10 @@ class CorefModel(nn.Module):
         self.update_steps = 0  # Internal use for debug
         self.debug = True
 
-        if self.config['model_type'] == 'fast':
-            emb = torch.rand(1, requires_grad=True)
-            # init.normal_(emb, std=0.02)
-            self.ms_weight = emb  # Set a initial value for the score of all mentions
+        # if self.config['model_type'] == 'fast':
+        emb = torch.rand(1, requires_grad=True)
+        self.ms_weight = emb
+        # self.ms_weight = self.make_ffnn(1, 0, output_size=1)  # Set a initial value for the score of all mentions
 
     def make_embedding(self, dict_size, std=0.02):
         emb = nn.Embedding(dict_size, self.config['feature_emb_size'])
@@ -113,6 +113,92 @@ class CorefModel(nn.Module):
     def forward(self, *input):
         return self.get_predictions_and_loss(*input)
 
+    def get_mention_scores(self, mention_doc, gold_starts, gold_ends, gold_cluster_map, span_starts, span_ends,
+                           conf, device, do_loss, use_gold_sg, gold_sg_starts=None, gold_sg_ends=None):
+        num_candidates = span_starts.shape[0]
+        num_words = mention_doc.shape[0]
+
+        # Get candidate labels
+        if do_loss:
+            same_start = (torch.unsqueeze(gold_starts, 1) == torch.unsqueeze(span_starts, 0))
+            same_end = (torch.unsqueeze(gold_ends, 1) == torch.unsqueeze(span_ends, 0))
+            same_span = (same_start & same_end).to(torch.long)
+            candidate_labels = torch.matmul(torch.unsqueeze(gold_cluster_map, 0).to(torch.float), same_span.to(torch.float))
+            candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0) # [num candidates]; non-gold span has label 0
+
+        span_start_emb, span_end_emb = mention_doc[span_starts], mention_doc[span_ends]
+        candidate_emb_list = [span_start_emb, span_end_emb]
+        if conf['use_features']:
+            candidate_width_idx = span_ends - span_starts
+            candidate_width_emb = self.emb_span_width(candidate_width_idx)
+            candidate_width_emb = self.dropout(candidate_width_emb)
+            candidate_emb_list.append(candidate_width_emb)
+        # Use attended head or avg token
+        candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)
+        candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(span_starts, 1)) & (candidate_tokens <= torch.unsqueeze(span_ends, 1))
+        if conf['model_heads']:
+            token_attn = torch.squeeze(self.mention_token_attn(mention_doc), 1)
+        else:
+            token_attn = torch.ones(num_words, dtype=torch.float, device=device)  # Use avg if no attention
+        candidate_tokens_attn_raw = torch.log(candidate_tokens_mask.to(torch.float)) + torch.unsqueeze(token_attn, 0)
+        candidate_tokens_attn = nn.functional.softmax(candidate_tokens_attn_raw, dim=1)
+        head_attn_emb = torch.matmul(candidate_tokens_attn, mention_doc)
+        candidate_emb_list.append(head_attn_emb)
+        candidate_span_emb = torch.cat(candidate_emb_list, dim=1)  # [num candidates, new emb size]
+
+        # Get span score
+        if use_gold_sg:
+            num_span = candidate_span_emb.shape[0]
+            candidate_mention_scores = self.ms_weight.expand(num_span).to(device).clone()
+        else:
+            candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
+        if conf['use_width_prior']:
+            width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
+            candidate_width_score = width_score[candidate_width_idx]
+            candidate_mention_scores += candidate_width_score
+
+        # Extract top spans
+        if use_gold_sg:
+            selected_idx_cpu = candidate_mention_scores.nonzero().flatten().tolist()
+            candidate_starts_cpu, candidate_ends_cpu = span_starts.tolist(), span_ends.tolist()
+            num_top_spans = len(candidate_starts_cpu)
+            assert len(selected_idx_cpu) == num_top_spans
+            top_span_starts, top_span_ends = span_starts, span_ends
+            top_antecedent_idx = top_span_starts
+            selected_idx = torch.tensor(selected_idx_cpu, device=device)
+            top_span_emb = candidate_span_emb[selected_idx]
+            top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
+            top_span_mention_scores = candidate_mention_scores[selected_idx]
+        else:
+            candidate_starts_cpu, candidate_ends_cpu = span_starts.tolist(), span_ends.tolist()
+            # remove duplicated spans in gold_sg_spans
+            ungold_idx_cpu = self.remove_sg_spans(candidate_starts_cpu, candidate_ends_cpu, gold_sg_starts.tolist(), gold_sg_ends.tolist())
+            candidate_starts_cpu = [candidate_starts_cpu[i] for i in ungold_idx_cpu]
+            candidate_ends_cpu = [candidate_ends_cpu[i] for i in ungold_idx_cpu]
+            candidate_mention_scores = candidate_mention_scores[ungold_idx_cpu]
+
+            candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
+            num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
+            selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
+            assert len(selected_idx_cpu) == num_top_spans
+            selected_idx = torch.tensor(selected_idx_cpu, device=device)
+            top_span_starts, top_span_ends = span_starts[selected_idx], span_ends[selected_idx]
+            top_span_emb = candidate_span_emb[selected_idx]
+            top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
+            top_span_mention_scores = candidate_mention_scores[selected_idx]
+
+        return num_top_spans, top_span_emb, top_span_cluster_ids, candidate_mention_scores, top_span_mention_scores, top_span_starts, top_span_ends
+
+    def remove_sg_spans(self, candidate_starts, candidate_ends, gold_starts, gold_ends):
+        selected_candidate_idx = []
+        gold_spans = [(gs, ge) for gs, ge in zip(gold_starts, gold_ends)]
+        for idx, (cs, ce) in enumerate(zip(candidate_starts, candidate_ends)):
+            candidate_span = (cs, ce)
+            if candidate_span not in gold_spans:
+                selected_candidate_idx.append(idx)
+        # selected_candidate_idx = set(selected_candidate_idx)
+        return selected_candidate_idx
+
     def get_predictions_and_loss(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                  is_training, gold_sg_starts=None, gold_sg_ends=None, gold_sg_cluster_map=None,
                                  gold_starts=None, gold_ends=None, gold_mention_cluster_map=None):
@@ -133,111 +219,133 @@ class CorefModel(nn.Module):
         speaker_ids = speaker_ids[input_mask]
         num_words = mention_doc.shape[0]
 
-        """use gold singleton boundaries"""
-        if conf['model_type'] == 'fast':
-            candidate_starts = gold_sg_starts
-            candidate_ends = gold_sg_ends
-            span_width = candidate_ends - candidate_starts
-            candidate_starts = candidate_starts[span_width < conf['max_span_width']]
-            candidate_ends = candidate_ends[span_width < conf['max_span_width']]
-        else:
-            # Get candidate span
-            sentence_indices = sentence_map  # [num tokens]
-            candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
-            candidate_ends = candidate_starts + torch.arange(0, self.max_span_width, device=device)
-            candidate_start_sent_idx = sentence_indices[candidate_starts]
-            candidate_end_sent_idx = sentence_indices[torch.min(candidate_ends, torch.tensor(num_words - 1, device=device))]
-            candidate_mask = (candidate_ends < num_words) & (candidate_start_sent_idx == candidate_end_sent_idx)
-            candidate_starts, candidate_ends = candidate_starts[candidate_mask], candidate_ends[candidate_mask]  # [num valid candidates]
+        # if conf['model_type'] == 'fast':
+        # use gold singleton boundaries
+        candidate_sg_starts = gold_sg_starts
+        candidate_sg_ends = gold_sg_ends
+        span_width = candidate_sg_ends - candidate_sg_starts
+        candidate_sg_starts = candidate_sg_starts[span_width < conf['max_span_width']]
+        candidate_sg_ends = candidate_sg_ends[span_width < conf['max_span_width']]
+        # else:
+        # Get candidate span
+        sentence_indices = sentence_map  # [num tokens]
+        candidate_starts = torch.unsqueeze(torch.arange(0, num_words, device=device), 1).repeat(1, self.max_span_width)
+        candidate_ends = candidate_starts + torch.arange(0, self.max_span_width, device=device)
+        candidate_start_sent_idx = sentence_indices[candidate_starts]
+        candidate_end_sent_idx = sentence_indices[torch.min(candidate_ends, torch.tensor(num_words - 1, device=device))]
+        candidate_mask = (candidate_ends < num_words) & (candidate_start_sent_idx == candidate_end_sent_idx)
+        candidate_starts, candidate_ends = candidate_starts[candidate_mask], candidate_ends[candidate_mask]  # [num valid candidates]
 
-        num_candidates = candidate_starts.shape[0]
+        # num_candidates = candidate_starts.shape[0]
 
-        # Get candidate labels
-        if do_loss:
-            same_start = (torch.unsqueeze(gold_starts, 1) == torch.unsqueeze(candidate_starts, 0))
-            same_end = (torch.unsqueeze(gold_ends, 1) == torch.unsqueeze(candidate_ends, 0))
-            same_span = (same_start & same_end).to(torch.long)
-            candidate_labels = torch.matmul(torch.unsqueeze(gold_mention_cluster_map, 0).to(torch.float), same_span.to(torch.float))
-            candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0) # [num candidates]; non-gold span has label 0
+        # # Get candidate labels
+        # if do_loss:
+        #     same_start = (torch.unsqueeze(gold_starts, 1) == torch.unsqueeze(candidate_starts, 0))
+        #     same_end = (torch.unsqueeze(gold_ends, 1) == torch.unsqueeze(candidate_ends, 0))
+        #     same_span = (same_start & same_end).to(torch.long)
+        #     candidate_labels = torch.matmul(torch.unsqueeze(gold_mention_cluster_map, 0).to(torch.float), same_span.to(torch.float))
+        #     candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0) # [num candidates]; non-gold span has label 0
+        #
+        #     if conf['model_type'] != 'fast':
+        #         same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
+        #         same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
+        #         same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
+        #         sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
+        #         sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
+        # elif conf['model_type'] != 'fast' and conf['sg_type'] == 'hard_encode':
+        #     same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
+        #     same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
+        #     same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
+        #     sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
+        #     sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
 
-            if conf['model_type'] != 'fast':
-                same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
-                same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
-                same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
-                sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
-                sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
-        elif conf['model_type'] != 'fast' and conf['sg_type'] == 'hard_encode':
-            same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
-            same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
-            same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
-            sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
-            sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
+        # # Get span embedding
+        # span_start_emb, span_end_emb = mention_doc[candidate_starts], mention_doc[candidate_ends]
+        # candidate_emb_list = [span_start_emb, span_end_emb]
+        # if conf['use_features']:
+        #     candidate_width_idx = candidate_ends - candidate_starts
+        #     candidate_width_emb = self.emb_span_width(candidate_width_idx)
+        #     candidate_width_emb = self.dropout(candidate_width_emb)
+        #     candidate_emb_list.append(candidate_width_emb)
+        # # Use attended head or avg token
+        # candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)
+        # candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
+        # if conf['model_heads']:
+        #     token_attn = torch.squeeze(self.mention_token_attn(mention_doc), 1)
+        # else:
+        #     token_attn = torch.ones(num_words, dtype=torch.float, device=device)  # Use avg if no attention
+        # candidate_tokens_attn_raw = torch.log(candidate_tokens_mask.to(torch.float)) + torch.unsqueeze(token_attn, 0)
+        # candidate_tokens_attn = nn.functional.softmax(candidate_tokens_attn_raw, dim=1)
+        # head_attn_emb = torch.matmul(candidate_tokens_attn, mention_doc)
+        # candidate_emb_list.append(head_attn_emb)
+        # candidate_span_emb = torch.cat(candidate_emb_list, dim=1)  # [num candidates, new emb size]
 
-        # Get span embedding
-        span_start_emb, span_end_emb = mention_doc[candidate_starts], mention_doc[candidate_ends]
-        candidate_emb_list = [span_start_emb, span_end_emb]
-        if conf['use_features']:
-            candidate_width_idx = candidate_ends - candidate_starts
-            candidate_width_emb = self.emb_span_width(candidate_width_idx)
-            candidate_width_emb = self.dropout(candidate_width_emb)
-            candidate_emb_list.append(candidate_width_emb)
-        # Use attended head or avg token
-        candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)
-        candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
-        if conf['model_heads']:
-            token_attn = torch.squeeze(self.mention_token_attn(mention_doc), 1)
-        else:
-            token_attn = torch.ones(num_words, dtype=torch.float, device=device)  # Use avg if no attention
-        candidate_tokens_attn_raw = torch.log(candidate_tokens_mask.to(torch.float)) + torch.unsqueeze(token_attn, 0)
-        candidate_tokens_attn = nn.functional.softmax(candidate_tokens_attn_raw, dim=1)
-        head_attn_emb = torch.matmul(candidate_tokens_attn, mention_doc)
-        candidate_emb_list.append(head_attn_emb)
-        candidate_span_emb = torch.cat(candidate_emb_list, dim=1)  # [num candidates, new emb size]
+        # # Get span score
+        # if conf['model_type'] == 'fast':
+        #     num_span = candidate_span_emb.shape[0]
+        #     candidate_mention_scores = self.ms_weight.expand(num_span).to(device)
+        #
+        #     # add predicted span scores
+        #     candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
+        #     if conf['use_width_prior']:
+        #         width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
+        #         candidate_width_score = width_score[candidate_width_idx]
+        #         candidate_mention_scores += candidate_width_score
+        # else:
+        #     candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
+        #     if conf['sg_type'] == 'ffnn':
+        #         candidate_sg_scores = torch.squeeze(self.span_emb_sg_score_ffnn(candidate_span_emb), 1)
+        #     elif conf['sg_type'] == 'hard_encode':
+        #         candidate_sg_scores = (sg_labels>0).to(torch.float)
+        #     # else:
+        #     #     raise ValueError('Unsupported sg_type, selected from ["ffnn", "hard_encode"]')
+        #     if conf['use_width_prior']:
+        #         width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
+        #         candidate_width_score = width_score[candidate_width_idx]
+        #         candidate_mention_scores += candidate_width_score
+        #         # candidate_sg_scores += candidate_width_score
 
-        # Get span score
-        if conf['model_type'] == 'fast':
-            num_span = candidate_span_emb.shape[0]
-            candidate_mention_scores = self.ms_weight.expand(num_span).to(device)
-        else:
-            candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
-            if conf['sg_type'] == 'ffnn':
-                candidate_sg_scores = torch.squeeze(self.span_emb_sg_score_ffnn(candidate_span_emb), 1)
-            elif conf['sg_type'] == 'hard_encode':
-                candidate_sg_scores = (sg_labels>0).to(torch.float)
-            else:
-                raise ValueError('Unsupported sg_type, selected from ["ffnn", "hard_encode"]')
-            if conf['use_width_prior']:
-                width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
-                candidate_width_score = width_score[candidate_width_idx]
-                candidate_mention_scores += candidate_width_score
-                # candidate_sg_scores += candidate_width_score
+        # # Extract top spans
+        # if conf['model_type'] == 'fast':
+        #     selected_idx_cpu = candidate_mention_scores.nonzero().flatten().tolist()
+        #     candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
+        #     num_top_spans = len(candidate_starts_cpu)
+        #     assert len(selected_idx_cpu) == num_top_spans
+        #     top_span_starts, top_span_ends = candidate_starts, candidate_ends
+        #     top_antecedent_idx = top_span_starts
+        #     selected_idx = torch.tensor(selected_idx_cpu, device=device)
+        #     top_span_emb = candidate_span_emb[selected_idx]
+        #     top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
+        #     top_span_mention_scores = candidate_mention_scores[selected_idx]
+        #     # top_span_sg_scores = candidate_sg_scores[selected_idx]
+        # else:
+        #     candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
+        #     candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
+        #     num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
+        #     selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
+        #     assert len(selected_idx_cpu) == num_top_spans
+        #     selected_idx = torch.tensor(selected_idx_cpu, device=device)
+        #     top_span_starts, top_span_ends = candidate_starts[selected_idx], candidate_ends[selected_idx]
+        #     top_span_emb = candidate_span_emb[selected_idx]
+        #     top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
+        #     top_span_mention_scores = candidate_mention_scores[selected_idx]
+        #     top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
+        #     top_span_sg_scores = candidate_sg_scores[selected_idx]
 
-        # Extract top spans
-        if conf['model_type'] == 'fast':
-            selected_idx_cpu = candidate_mention_scores.nonzero().flatten().tolist()
-            candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
-            num_top_spans = len(candidate_starts_cpu)
-            assert len(selected_idx_cpu) == num_top_spans
-            top_span_starts, top_span_ends = candidate_starts, candidate_ends
-            top_antecedent_idx = top_span_starts
-            selected_idx = torch.tensor(selected_idx_cpu, device=device)
-            top_span_emb = candidate_span_emb[selected_idx]
-            top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
-            top_span_mention_scores = candidate_mention_scores[selected_idx]
-            # top_span_sg_scores = candidate_sg_scores[selected_idx]
-        else:
-            candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
-            candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
-            num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
-            selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
-            assert len(selected_idx_cpu) == num_top_spans
-            selected_idx = torch.tensor(selected_idx_cpu, device=device)
-            top_span_starts, top_span_ends = candidate_starts[selected_idx], candidate_ends[selected_idx]
-            top_span_emb = candidate_span_emb[selected_idx]
-            top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
-            top_span_mention_scores = candidate_mention_scores[selected_idx]
-            top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
-            top_span_sg_scores = candidate_sg_scores[selected_idx]
+        num_top_spans, top_span_emb, top_span_cluster_ids, candidate_mention_scores, top_span_mention_scores, top_span_starts, top_span_ends = \
+            self.get_mention_scores(mention_doc, gold_starts, gold_ends, gold_mention_cluster_map, candidate_starts, candidate_ends, conf, device, do_loss, use_gold_sg=False,
+                                    gold_sg_starts=gold_sg_starts, gold_sg_ends=gold_sg_ends)
+
+        num_sg_top_spans, top_sg_span_emb, top_sg_span_cluster_ids, candidate_sg_scores, top_sg_span_mention_scores, top_sg_starts, top_sg_ends = \
+            self.get_mention_scores(mention_doc, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, candidate_sg_starts, candidate_sg_ends, conf, device, do_loss, use_gold_sg=True)
+
+        num_top_spans += num_sg_top_spans
+        top_span_emb = torch.cat([top_span_emb, top_sg_span_emb], dim=0)
+        top_span_cluster_ids = torch.cat([top_span_cluster_ids, top_sg_span_cluster_ids])
+        candidate_mention_scores = torch.cat([candidate_mention_scores, candidate_sg_scores])
+        top_span_mention_scores = torch.cat([top_span_mention_scores, top_sg_span_mention_scores])
+        top_span_starts = torch.cat([top_span_starts, top_sg_starts])
+        top_span_ends = torch.cat([top_span_ends, top_sg_ends])
 
         # Coarse pruning on each mention's antecedents
         max_top_antecedents = min(num_top_spans, conf['max_top_antecedents'])
@@ -251,9 +359,9 @@ class CorefModel(nn.Module):
 
         if conf['model_type'] == 'fast':
             pairwise_fast_scores = pairwise_mention_score_sum
-        else:
+        else:   # add singleton score to pairwise mention scores
             pairwise_sg_score_sum = torch.unsqueeze(top_span_sg_scores, 1) + torch.unsqueeze(top_span_sg_scores, 0)
-            pairwise_sg_score_sum[pairwise_sg_score_sum<0] = 0
+            # pairwise_sg_score_sum[pairwise_sg_score_sum<0] = 0
             # pairwise_fast_scores -= conf["sg_score_coef"] * (1 - pairwise_sg_score_sum)
             pairwise_fast_scores = (1 - conf["sg_score_coef"]) * pairwise_mention_score_sum + conf["sg_score_coef"] * pairwise_sg_score_sum
         pairwise_fast_scores += pairwise_coref_scores
