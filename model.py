@@ -114,7 +114,7 @@ class CorefModel(nn.Module):
         return self.get_predictions_and_loss(*input)
 
     def get_mention_scores(self, mention_doc, gold_starts, gold_ends, gold_cluster_map, span_starts, span_ends,
-                           conf, device, do_loss, use_gold_sg, gold_sg_starts=None, gold_sg_ends=None):
+                           conf, device, do_loss, use_gold_sg, pred_starts=None, pred_ends=None):
         num_candidates = span_starts.shape[0]
         num_words = mention_doc.shape[0]
 
@@ -159,24 +159,30 @@ class CorefModel(nn.Module):
 
         # Extract top spans
         if use_gold_sg:
-            selected_idx_cpu = candidate_mention_scores.nonzero().flatten().tolist()
             candidate_starts_cpu, candidate_ends_cpu = span_starts.tolist(), span_ends.tolist()
+            # remove duplicated spans in gold_sg_spans
+            gold_idx_cpu = self.remove_sg_spans(candidate_starts_cpu, candidate_ends_cpu, pred_starts.tolist(), pred_ends.tolist())
+            candidate_starts_cpu = [candidate_starts_cpu[i] for i in gold_idx_cpu]
+            candidate_ends_cpu = [candidate_ends_cpu[i] for i in gold_idx_cpu]
+            candidate_mention_scores = candidate_mention_scores[gold_idx_cpu]
+
             num_top_spans = len(candidate_starts_cpu)
+            selected_idx_cpu = candidate_mention_scores.nonzero().flatten().tolist()
             assert len(selected_idx_cpu) == num_top_spans
             top_span_starts, top_span_ends = span_starts, span_ends
             top_antecedent_idx = top_span_starts
-            selected_idx = torch.tensor(selected_idx_cpu, device=device)
-            top_span_emb = candidate_span_emb[selected_idx]
-            top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
-            top_span_mention_scores = candidate_mention_scores[selected_idx]
+            # selected_idx = torch.tensor(selected_idx_cpu, device=device)
+            if selected_idx_cpu:
+                selected_idx = torch.tensor(selected_idx_cpu, device=device)
+                top_span_emb = candidate_span_emb[selected_idx]
+                top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
+                top_span_mention_scores = candidate_mention_scores[selected_idx]
+            else:
+                top_span_emb = torch.tensor([])
+                top_span_cluster_ids = torch.tensor([]) if do_loss else None
+                top_span_mention_scores = torch.tensor([])
         else:
             candidate_starts_cpu, candidate_ends_cpu = span_starts.tolist(), span_ends.tolist()
-            # remove duplicated spans in gold_sg_spans
-            ungold_idx_cpu = self.remove_sg_spans(candidate_starts_cpu, candidate_ends_cpu, gold_sg_starts.tolist(), gold_sg_ends.tolist())
-            candidate_starts_cpu = [candidate_starts_cpu[i] for i in ungold_idx_cpu]
-            candidate_ends_cpu = [candidate_ends_cpu[i] for i in ungold_idx_cpu]
-            candidate_mention_scores = candidate_mention_scores[ungold_idx_cpu]
-
             candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
             num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
             selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
@@ -189,14 +195,20 @@ class CorefModel(nn.Module):
 
         return num_top_spans, top_span_emb, top_span_cluster_ids, candidate_mention_scores, top_span_mention_scores, top_span_starts, top_span_ends
 
-    def remove_sg_spans(self, candidate_starts, candidate_ends, gold_starts, gold_ends):
+    def remove_sg_spans(self, gold_starts, gold_ends, candidate_starts, candidate_ends):
         selected_candidate_idx = []
-        gold_spans = [(gs, ge) for gs, ge in zip(gold_starts, gold_ends)]
-        for idx, (cs, ce) in enumerate(zip(candidate_starts, candidate_ends)):
-            candidate_span = (cs, ce)
-            if candidate_span not in gold_spans:
+        # gold_spans = [(gs, ge) for gs, ge in zip(gold_starts, gold_ends)]
+        # for idx, (cs, ce) in enumerate(zip(candidate_starts, candidate_ends)):
+        #     candidate_span = (cs, ce)
+        #     if candidate_span not in gold_spans:
+        #         selected_candidate_idx.append(idx)
+
+        candidate_spans = [(cs, ce) for cs, ce in zip(candidate_starts, candidate_ends)]
+        for idx, (gs, ge) in enumerate(zip(gold_starts, gold_ends)):
+            gold_span = (gs, ge)
+            if gold_span not in candidate_spans:
                 selected_candidate_idx.append(idx)
-        # selected_candidate_idx = set(selected_candidate_idx)
+
         return selected_candidate_idx
 
     def get_predictions_and_loss(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
@@ -333,20 +345,21 @@ class CorefModel(nn.Module):
         #     top_span_sg_scores = candidate_sg_scores[selected_idx]
 
         num_top_spans, top_span_emb, top_span_cluster_ids, candidate_mention_scores, top_span_mention_scores, top_span_starts, top_span_ends = \
-            self.get_mention_scores(mention_doc, gold_starts, gold_ends, gold_mention_cluster_map, candidate_starts, candidate_ends, conf, device, do_loss, use_gold_sg=False,
-                                    gold_sg_starts=gold_sg_starts, gold_sg_ends=gold_sg_ends)
+            self.get_mention_scores(mention_doc, gold_starts, gold_ends, gold_mention_cluster_map, candidate_starts, candidate_ends, conf, device, do_loss, use_gold_sg=False)
 
-        num_sg_top_spans, top_sg_span_emb, top_sg_span_cluster_ids, candidate_sg_scores, top_sg_span_mention_scores, top_sg_starts, top_sg_ends = \
-            self.get_mention_scores(mention_doc, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, candidate_sg_starts, candidate_sg_ends, conf, device, do_loss, use_gold_sg=True)
-
-        num_top_spans += num_sg_top_spans
-        top_span_emb = torch.cat([top_span_emb, top_sg_span_emb], dim=0)
-        if do_loss:
-            top_span_cluster_ids = torch.cat([top_span_cluster_ids, top_sg_span_cluster_ids])
-        candidate_mention_scores = torch.cat([candidate_mention_scores, candidate_sg_scores])
-        top_span_mention_scores = torch.cat([top_span_mention_scores, top_sg_span_mention_scores])
-        top_span_starts = torch.cat([top_span_starts, top_sg_starts])
-        top_span_ends = torch.cat([top_span_ends, top_sg_ends])
+        # num_sg_top_spans, top_sg_span_emb, top_sg_span_cluster_ids, candidate_sg_scores, top_sg_span_mention_scores, top_sg_starts, top_sg_ends = \
+        #     self.get_mention_scores(mention_doc, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, candidate_sg_starts, candidate_sg_ends, conf, device, do_loss, use_gold_sg=True,
+        #                             pred_starts=candidate_starts, pred_ends=candidate_ends)
+        #
+        # if num_sg_top_spans > 0:
+        #     num_top_spans += num_sg_top_spans
+        #     top_span_emb = torch.cat([top_span_emb, top_sg_span_emb], dim=0)
+        #     if do_loss:
+        #         top_span_cluster_ids = torch.cat([top_span_cluster_ids, top_sg_span_cluster_ids])
+        #     candidate_mention_scores = torch.cat([candidate_mention_scores, candidate_sg_scores])
+        #     top_span_mention_scores = torch.cat([top_span_mention_scores, top_sg_span_mention_scores])
+        #     top_span_starts = torch.cat([top_span_starts, top_sg_starts])
+        #     top_span_ends = torch.cat([top_span_ends, top_sg_ends])
 
         # Coarse pruning on each mention's antecedents
         max_top_antecedents = min(num_top_spans, conf['max_top_antecedents'])
