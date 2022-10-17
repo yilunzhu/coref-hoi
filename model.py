@@ -341,7 +341,8 @@ class CorefModel(nn.Module):
 
         num_top_spans += num_sg_top_spans
         top_span_emb = torch.cat([top_span_emb, top_sg_span_emb], dim=0)
-        top_span_cluster_ids = torch.cat([top_span_cluster_ids, top_sg_span_cluster_ids])
+        if do_loss:
+            top_span_cluster_ids = torch.cat([top_span_cluster_ids, top_sg_span_cluster_ids])
         candidate_mention_scores = torch.cat([candidate_mention_scores, candidate_sg_scores])
         top_span_mention_scores = torch.cat([top_span_mention_scores, top_sg_span_mention_scores])
         top_span_starts = torch.cat([top_span_starts, top_sg_starts])
