@@ -210,7 +210,7 @@ class CorefModel(nn.Module):
                 width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
                 candidate_width_score = width_score[candidate_width_idx]
                 candidate_mention_scores += candidate_width_score
-                # candidate_sg_scores += candidate_width_score
+                candidate_sg_scores += candidate_width_score
 
         # Extract top spans
         if conf['model_type'] == 'fast':
