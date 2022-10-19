@@ -38,6 +38,7 @@ class CorefModel(nn.Module):
         self.span_emb_size = self.bert_emb_size * 3
         if config['use_features']:
             self.span_emb_size += config['feature_emb_size']
+            self.span_emb_size += config['emb_sg_size']
         self.pair_emb_size = self.span_emb_size * 3
         if config['use_metadata']:
             self.pair_emb_size += 2 * config['feature_emb_size']
