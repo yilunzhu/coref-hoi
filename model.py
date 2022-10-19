@@ -24,6 +24,7 @@ class CorefModel(nn.Module):
         self.num_genres = num_genres if num_genres else len(config['genres'])
         self.max_seg_len = config['max_segment_len']
         self.max_span_width = config['max_span_width']
+        self.emb_sg_size = config['emb_sg_size']
         assert config['loss_type'] in ['marginalized', 'hinge']
         # assert config['sg_type'] in ['ffnn', 'hard_encode']
         if config['coref_depth'] > 1 or config['higher_order'] == 'cluster_merging':
@@ -45,6 +46,7 @@ class CorefModel(nn.Module):
         if config['use_segment_distance']:
             self.pair_emb_size += config['feature_emb_size']
 
+        self.emb_sg = self.make_embedding(self.emb_sg_size) if config['use_features'] else None
         self.emb_span_width = self.make_embedding(self.max_span_width) if config['use_features'] else None
         self.emb_span_width_prior = self.make_embedding(self.max_span_width) if config['use_width_prior'] else None
         self.emb_antecedent_distance_prior = self.make_embedding(10) if config['use_distance_prior'] else None
@@ -166,12 +168,14 @@ class CorefModel(nn.Module):
                 same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
                 sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
                 sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
+                sg_labels = (sg_labels >= 1).to(torch.long)
         elif conf['model_type'] != 'fast' and conf['sg_type'] == 'hard_encode':
             same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
             same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
             same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
             sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
             sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
+            sg_labels = (sg_labels >= 1).to(torch.long)
 
         # Get span embedding
         span_start_emb, span_end_emb = mention_doc[candidate_starts], mention_doc[candidate_ends]
@@ -181,6 +185,10 @@ class CorefModel(nn.Module):
             candidate_width_emb = self.emb_span_width(candidate_width_idx)
             candidate_width_emb = self.dropout(candidate_width_emb)
             candidate_emb_list.append(candidate_width_emb)
+
+            if conf['model_type'] != 'fast':
+                candidate_sg_emb = self.emb_sg(sg_labels)
+                candidate_emb_list.append(candidate_sg_emb)
         # Use attended head or avg token
         candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)
         candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
