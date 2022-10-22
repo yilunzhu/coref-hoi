@@ -38,7 +38,7 @@ class CorefModel(nn.Module):
         self.span_emb_size = self.bert_emb_size * 3
         if config['use_features']:
             self.span_emb_size += config['feature_emb_size']
-            self.span_emb_size += config['emb_sg_size']
+            # self.span_emb_size += config['emb_sg_size']
         self.pair_emb_size = self.span_emb_size * 3
         if config['use_metadata']:
             self.pair_emb_size += 2 * config['feature_emb_size']
@@ -47,7 +47,7 @@ class CorefModel(nn.Module):
         if config['use_segment_distance']:
             self.pair_emb_size += config['feature_emb_size']
 
-        self.emb_sg = self.make_embedding(self.emb_sg_size) if config['use_features'] else None
+        # self.emb_sg = self.make_embedding(self.emb_sg_size) if config['use_features'] else None
         self.emb_span_width = self.make_embedding(self.max_span_width) if config['use_features'] else None
         self.emb_span_width_prior = self.make_embedding(self.max_span_width) if config['use_width_prior'] else None
         self.emb_antecedent_distance_prior = self.make_embedding(10) if config['use_distance_prior'] else None
@@ -187,9 +187,9 @@ class CorefModel(nn.Module):
             candidate_width_emb = self.dropout(candidate_width_emb)
             candidate_emb_list.append(candidate_width_emb)
 
-            if conf['model_type'] != 'fast':
-                candidate_sg_emb = self.emb_sg(sg_labels)
-                candidate_emb_list.append(candidate_sg_emb)
+            # if conf['model_type'] != 'fast':
+            #     candidate_sg_emb = self.emb_sg(sg_labels)
+            #     candidate_emb_list.append(candidate_sg_emb)
         # Use attended head or avg token
         candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)
         candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
@@ -384,9 +384,9 @@ class CorefModel(nn.Module):
         if conf['model_type'] != 'fast' and conf['sg_loss_coef']:
             gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
             non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
-            loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) * conf['sg_loss_coef']
-            loss_sg += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores))) * conf['sg_loss_coef']
-            loss += loss_sg
+            loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores)))
+            loss_sg += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores)))
+            loss += loss_sg * conf['sg_loss_coef']
 
         if conf['higher_order'] == 'cluster_merging':
             top_pairwise_scores += cluster_merging_scores
