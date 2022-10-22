@@ -81,7 +81,7 @@ class Runner:
         schedulers = self.get_scheduler(optimizers, total_update_steps)
 
         # Get model parameters for grad clipping
-        bert_param, task_param = model.get_params()
+        bert_param, task_param, aux_task_param = model.get_params()
 
         # Start training
         logger.info('*******************Training*******************')
@@ -111,6 +111,7 @@ class Runner:
                 if conf['max_grad_norm']:
                     torch.nn.utils.clip_grad_norm_(bert_param, conf['max_grad_norm'])
                     torch.nn.utils.clip_grad_norm_(task_param, conf['max_grad_norm'])
+                    torch.nn.utils.clip_grad_norm_(aux_task_param, conf['max_grad_norm'])
                 loss_during_accum.append(loss.item())
 
                 # Update
@@ -213,7 +214,7 @@ class Runner:
 
     def get_optimizer(self, model):
         no_decay = ['bias', 'LayerNorm.weight']
-        bert_param, task_param = model.get_params(named=True)
+        bert_param, task_param, aux_task_param = model.get_params(named=True)
         grouped_bert_param = [
             {
                 'params': [p for n, p in bert_param if not any(nd in n for nd in no_decay)],
@@ -227,7 +228,9 @@ class Runner:
         ]
         optimizers = [
             AdamW(grouped_bert_param, lr=self.config['bert_learning_rate'], eps=self.config['adam_eps']),
-            Adam(model.get_params()[1], lr=self.config['task_learning_rate'], eps=self.config['adam_eps'], weight_decay=0)
+            Adam(model.get_params()[1], lr=self.config['task_learning_rate'], eps=self.config['adam_eps'], weight_decay=0),
+            Adam(model.get_params()[1], lr=self.config['aux_task_learning_rate'], eps=self.config['adam_eps'], weight_decay=0)
+
         ]
         return optimizers
         # grouped_parameters = [

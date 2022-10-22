@@ -103,15 +103,18 @@ class CorefModel(nn.Module):
         return nn.Sequential(*ffnn)
 
     def get_params(self, named=False):
-        bert_based_param, task_param = [], []
+        bert_based_param, task_param, aux_task_param = [], [], []
         for name, param in self.named_parameters():
             if name.startswith('bert'):
                 to_add = (name, param) if named else param
                 bert_based_param.append(to_add)
+            elif '_sg_' in name:
+                to_add = (name, param) if named else param
+                aux_task_param.append(to_add)
             else:
                 to_add = (name, param) if named else param
                 task_param.append(to_add)
-        return bert_based_param, task_param
+        return bert_based_param, task_param, aux_task_param
 
     def forward(self, *input):
         return self.get_predictions_and_loss(*input)
@@ -384,8 +387,7 @@ class CorefModel(nn.Module):
         if conf['model_type'] != 'fast' and conf['sg_loss_coef']:
             gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
             non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
-            loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores)))
-            loss_sg += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores)))
+            loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) + -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores)))
             loss += loss_sg * conf['sg_loss_coef']
 
         if conf['higher_order'] == 'cluster_merging':
