@@ -357,9 +357,9 @@ class CorefModel(nn.Module):
         # Get loss
         top_antecedent_scores = torch.cat([torch.zeros(num_top_spans, 1, device=device), top_pairwise_scores], dim=1)
         if conf['loss_type'] == 'marginalized':
-            log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1)
-            log_norm = torch.logsumexp(top_antecedent_scores, dim=1)
-            loss = (1 - conf['sg_loss_coef']) * torch.sum(log_norm - log_marginalized_antecedent_scores)
+            log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1) * (1 - conf['sg_loss_coef'])
+            log_norm = torch.logsumexp(top_antecedent_scores, dim=1) * (1 - conf['sg_loss_coef'])
+            loss = torch.sum(log_norm - log_marginalized_antecedent_scores)
         elif conf['loss_type'] == 'hinge':
             top_antecedent_mask = torch.cat([torch.ones(num_top_spans, 1, dtype=torch.bool, device=device), top_antecedent_mask], dim=1)
             top_antecedent_scores += torch.log(top_antecedent_mask.to(torch.float))
@@ -388,7 +388,8 @@ class CorefModel(nn.Module):
             gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
             non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
             loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) + -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores)))
-            loss += loss_sg * conf['sg_loss_coef']
+            loss_sg = loss_sg * conf['sg_loss_coef']
+            loss += loss_sg
 
         if conf['higher_order'] == 'cluster_merging':
             top_pairwise_scores += cluster_merging_scores
