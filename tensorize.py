@@ -67,15 +67,19 @@ class CorefDataProcessor:
             # Generate tensorized samples
             self.tensor_samples = {}
             tensorizer = Tensorizer(self.config, self.tokenizer)
+            if self.config['dataset'] == 'ontonotes':
+                to_add = 'train'
+            else:
+                to_add = 'train.gum'
             paths = {
-                'trn': join(self.data_dir, self.config['dataset'], f'train.{self.language}.{self.max_seg_len}.jsonlines'),
+                'trn': join(self.data_dir, self.config['dataset'], f'{to_add}.{self.language}.{self.max_seg_len}.jsonlines'),
                 # 'dev': join(self.data_dir, self.config['dataset'], f'dev.{self.language}.{self.max_seg_len}.jsonlines'),
                 # 'tst': join(self.data_dir, self.config['dataset'], f'test.{self.language}.{self.max_seg_len}.jsonlines')
                 'dev': join(self.data_dir, 'ontogum', f'test.gum.{self.language}.{self.max_seg_len}.jsonlines'),
                 'tst': join(self.data_dir, 'ontogum', f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
-                'trn': join(self.data_dir, self.config['dataset']+'_sg', f'train.{self.language}.{self.max_seg_len}.jsonlines'),
+                'trn': join(self.data_dir, self.config['dataset']+'_sg', f'{to_add}.{self.language}.{self.max_seg_len}.jsonlines'),
                 # 'dev': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'dev_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines'),
                 # 'tst': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'test_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines')
                 'dev': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'test.gum.{self.language}.{self.max_seg_len}.jsonlines'),
