@@ -241,6 +241,10 @@ class CorefModel(nn.Module):
             candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
             candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
             num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
+            # if do_loss:
+            #     num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
+            # else:
+            #     num_top_spans = int(min(conf['max_num_extracted_spans'], candidate_mention_scores[candidate_mention_scores>conf['mention_threshold']].size(0), len(candidate_starts_cpu)))
             selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
             assert len(selected_idx_cpu) == num_top_spans
             selected_idx = torch.tensor(selected_idx_cpu, device=device)

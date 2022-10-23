@@ -75,7 +75,7 @@ class CorefDataProcessor:
                 'tst': join(self.data_dir, 'ontogum', f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
-                'trn': join(self.data_dir, self.config['dataset']+'_sg', f'train_sg.{self.language}.{self.max_seg_len}.jsonlines'),
+                'trn': join(self.data_dir, self.config['dataset']+'_sg', f'train.{self.language}.{self.max_seg_len}.jsonlines'),
                 # 'dev': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'dev_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines'),
                 # 'tst': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'test_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines')
                 'dev': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'test.gum.{self.language}.{self.max_seg_len}.jsonlines'),
