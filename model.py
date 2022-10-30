@@ -26,7 +26,7 @@ class CorefModel(nn.Module):
         self.max_span_width = config['max_span_width']
         self.emb_sg_size = config['emb_sg_size']
         assert config['loss_type'] in ['marginalized', 'hinge']
-        # assert config['sg_type'] in ['ffnn', 'hard_encode']
+        assert config['sg_type'] in ['ffnn', 'hard_encode']
         if config['coref_depth'] > 1 or config['higher_order'] == 'cluster_merging':
             assert config['fine_grained']  # Higher-order is in slow fine-grained scoring
 
@@ -362,8 +362,11 @@ class CorefModel(nn.Module):
         top_antecedent_scores = torch.cat([torch.zeros(num_top_spans, 1, device=device), top_pairwise_scores], dim=1)
         if conf['loss_type'] == 'marginalized':
             log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1) * (1 - conf['sg_loss_coef'])
-            log_norm = torch.logsumexp(top_antecedent_scores, dim=1) * (1 - conf['sg_loss_coef'])
-            loss = torch.sum(log_norm - log_marginalized_antecedent_scores)
+            log_norm = torch.logsumexp(top_antecedent_scores, dim=1)
+            loss_coref = torch.sum(log_norm - log_marginalized_antecedent_scores)
+            if conf['weight'] != 'dwa':
+                loss_coref = loss_coref * (1 - conf['sg_loss_coef'])
+            loss = loss_coref.detach().clone()
         elif conf['loss_type'] == 'hinge':
             top_antecedent_mask = torch.cat([torch.ones(num_top_spans, 1, dtype=torch.bool, device=device), top_antecedent_mask], dim=1)
             top_antecedent_scores += torch.log(top_antecedent_mask.to(torch.float))
@@ -377,14 +380,17 @@ class CorefModel(nn.Module):
             delta = ((3 - conf['false_new_delta']) / 2) * torch.ones(num_top_spans, dtype=torch.float, device=device)
             delta -= (1 - conf['false_new_delta']) * mistake_false_new.to(torch.float)
             delta *= torch.logical_not(highest_antecedent_is_gold).to(torch.float)
-            loss = torch.sum(slack_hinge * delta)
+            loss_coref = torch.sum(slack_hinge * delta)
+            loss = loss_coref
 
         # Add mention loss
         if conf['mention_loss_coef']:
             gold_mention_scores = top_span_mention_scores[top_span_cluster_ids > 0]
             non_gold_mention_scores = top_span_mention_scores[top_span_cluster_ids == 0]
-            loss_mention = -torch.sum(torch.log(torch.sigmoid(gold_mention_scores))) * conf['mention_loss_coef']
-            loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_mention_scores))) * conf['mention_loss_coef']
+            loss_mention = -torch.sum(torch.log(torch.sigmoid(gold_mention_scores)))
+            loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_mention_scores)))
+            if conf['weight'] != 'dwa':
+                loss_mention = loss_mention * conf['mention_loss_coef']
             loss += loss_mention
 
         # Add singleton loss
@@ -392,7 +398,8 @@ class CorefModel(nn.Module):
             gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
             non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
             loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) + -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores)))
-            loss_sg = loss_sg * conf['sg_loss_coef']
+            if conf['weight'] != 'dwa':
+                loss_sg = loss_sg * conf['sg_loss_coef']
             loss += loss_sg
 
         if conf['higher_order'] == 'cluster_merging':
@@ -422,7 +429,7 @@ class CorefModel(nn.Module):
                     logger.info('loss: %.4f' % loss)
         self.update_steps += 1
 
-        return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedent_idx, top_antecedent_scores], loss
+        return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedent_idx, top_antecedent_scores], [loss_coref, loss_sg]
 
     def _extract_top_spans(self, candidate_idx_sorted, candidate_starts, candidate_ends, num_top_spans):
         """ Keep top non-cross-overlapping candidates ordered by scores; compute on CPU because of loop """
