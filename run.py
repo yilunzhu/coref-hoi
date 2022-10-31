@@ -124,6 +124,8 @@ class Runner:
 
                 if conf['weight'] == 'dwa':
                     loss = sum([lambda_weight[i, epo] * task_loss[i] for i in range(2)])
+                elif conf['sg_type'] == 'none':
+                    loss = task_loss[0]
                 else:
                     loss = sum(task_loss)
 
