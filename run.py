@@ -319,7 +319,7 @@ class Runner:
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument("--config", default="train_spanbert_large_ml0_d2")
+    parser.add_argument("--config")
     parser.add_argument("--gpu", type=int)
     args = parser.parse_args()
     # config_name, gpu_id = sys.argv[1], int(sys.argv[2])
