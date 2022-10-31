@@ -97,37 +97,13 @@ class Runner:
         start_time = time.time()
         model.zero_grad()
 
-        # initialize dwa
-        T = conf['temp']
-        avg_cost = np.zeros([epochs, 2], dtype=np.float32)
-        lambda_weight = np.ones([2, epochs])
-
         for epo in range(epochs):
-            cost = np.zeros(2, dtype=np.float32)
-
-            # apply Dynamic Weight Average
-            if conf['weight'] == 'dwa':
-                if epo == 0 or epo == 1:
-                    lambda_weight[:, epo] = 1.0
-                else:
-                    w_1 = avg_cost[epo - 1, 0] / avg_cost[epo - 2, 0]
-                    w_2 = avg_cost[epo - 1, 1] / avg_cost[epo - 2, 1]
-                    lambda_weight[0, epo] = 2 * np.exp(w_1 / T) / (np.exp(w_1 / T) + np.exp(w_2 / T))
-                    lambda_weight[1, epo] = 2 * np.exp(w_2 / T) / (np.exp(w_1 / T) + np.exp(w_2 / T))
-
             random.shuffle(examples_train)  # Shuffle training set
             for doc_key, example in examples_train:
                 # Forward pass
                 model.train()
                 example_gpu = [d.to(self.device) for d in example]
-                _, task_loss = model(*example_gpu)
-
-                if conf['weight'] == 'dwa':
-                    loss = sum([lambda_weight[i, epo] * task_loss[i] for i in range(2)])
-                elif conf['sg_type'] == 'none':
-                    loss = task_loss[0]
-                else:
-                    loss = sum(task_loss)
+                _, loss = model(*example_gpu)
 
                 # Backward; accumulate gradients and clip by grad norm
                 if grad_accum > 1:
@@ -152,12 +128,6 @@ class Runner:
                     loss_during_accum = []
                     loss_during_report += effective_loss
                     loss_history.append(effective_loss)
-
-                    if conf['weight'] == 'dwa':
-                        # Update task weights
-                        cost[0] = task_loss[0].item()
-                        cost[1] = task_loss[1].item()
-                        avg_cost[epo, :] += cost / len(examples_train)
 
                     # Report
                     if len(loss_history) % conf['report_frequency'] == 0:

@@ -166,7 +166,7 @@ class CorefModel(nn.Module):
             candidate_labels = torch.matmul(torch.unsqueeze(gold_mention_cluster_map, 0).to(torch.float), same_span.to(torch.float))
             candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0) # [num candidates]; non-gold span has label 0
 
-            if conf['model_type'] != 'fast':
+            if conf['model_type'] != 'fast' and conf['sg_type'] != 'none':
                 same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
                 same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
                 same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
@@ -190,9 +190,6 @@ class CorefModel(nn.Module):
             candidate_width_emb = self.dropout(candidate_width_emb)
             candidate_emb_list.append(candidate_width_emb)
 
-            # if conf['model_type'] != 'fast':
-            #     candidate_sg_emb = self.emb_sg(sg_labels)
-            #     candidate_emb_list.append(candidate_sg_emb)
         # Use attended head or avg token
         candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)
         candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
@@ -247,8 +244,8 @@ class CorefModel(nn.Module):
             top_span_emb = candidate_span_emb[selected_idx]
             top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
             top_span_mention_scores = candidate_mention_scores[selected_idx]
-            top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
             if conf['sg_type'] != 'none':
+                top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
                 top_span_sg_scores = candidate_sg_scores[selected_idx]
 
         # Coarse pruning on each mention's antecedents
@@ -361,10 +358,10 @@ class CorefModel(nn.Module):
         if conf['loss_type'] == 'marginalized':
             log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1) * (1 - conf['sg_loss_coef'])
             log_norm = torch.logsumexp(top_antecedent_scores, dim=1)
-            loss_coref = torch.sum(log_norm - log_marginalized_antecedent_scores)
-            if conf['weight'] != 'dwa':
-                loss_coref = loss_coref * (1 - conf['sg_loss_coef'])
-            loss = loss_coref.detach().clone()
+            loss = torch.sum(log_norm - log_marginalized_antecedent_scores)
+            # if conf['weight'] != 'dwa':
+            loss = loss * (1 - conf['sg_loss_coef'])
+            # loss = loss_coref.detach().clone()
         elif conf['loss_type'] == 'hinge':
             top_antecedent_mask = torch.cat([torch.ones(num_top_spans, 1, dtype=torch.bool, device=device), top_antecedent_mask], dim=1)
             top_antecedent_scores += torch.log(top_antecedent_mask.to(torch.float))
@@ -396,8 +393,8 @@ class CorefModel(nn.Module):
             gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
             non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
             loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) + -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores)))
-            if conf['weight'] != 'dwa':
-                loss_sg = loss_sg * conf['sg_loss_coef']
+            # if conf['weight'] != 'dwa':
+            loss_sg = loss_sg * conf['sg_loss_coef']
             loss += loss_sg
 
         if conf['higher_order'] == 'cluster_merging':
@@ -427,11 +424,7 @@ class CorefModel(nn.Module):
                     logger.info('loss: %.4f' % loss)
         self.update_steps += 1
 
-        if conf['sg_type'] == 'none':
-            l = [loss_coref]
-        else:
-            l = [loss_coref, loss_sg]
-        return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedent_idx, top_antecedent_scores], l
+        return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedent_idx, top_antecedent_scores], loss
 
     def _extract_top_spans(self, candidate_idx_sorted, candidate_starts, candidate_ends, num_top_spans):
         """ Keep top non-cross-overlapping candidates ordered by scores; compute on CPU because of loop """
