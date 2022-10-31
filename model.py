@@ -391,6 +391,7 @@ class CorefModel(nn.Module):
                 loss_mention = loss_mention * conf['mention_loss_coef']
             loss += loss_mention
 
+        loss_sg = torch.zeros(1)[0]
         # Add singleton loss
         if conf['model_type'] != 'fast' and conf['sg_type'] != 'none':
             gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
@@ -419,7 +420,7 @@ class CorefModel(nn.Module):
                 logger.info('spans/gold: %d/%d; ratio: %.2f' % (num_top_spans, (top_span_cluster_ids > 0).sum(), (top_span_cluster_ids > 0).sum()/num_top_spans))
                 if conf['mention_loss_coef']:
                     logger.info('mention loss: %.4f' % loss_mention)
-                if conf['sg_loss_coef']:
+                if conf['sg_type'] != 'none':
                     logger.info('mention loss: %.4f' % loss_sg)
                 if conf['loss_type'] == 'marginalized':
                     logger.info('norm/gold: %.4f/%.4f; loss: %.4f' % (torch.sum(log_norm), torch.sum(log_marginalized_antecedent_scores), loss))
