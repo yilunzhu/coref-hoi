@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class CorefDataProcessor:
-    def __init__(self, config, dataset='ontonotes', language='english'):
+    def __init__(self, config, testset, language='english'):
         self.config = config
-        self.dataset = dataset
+        self.testset = testset
         self.language = language
 
         self.max_seg_len = config['max_segment_len']
@@ -33,15 +33,19 @@ class CorefDataProcessor:
 
     def get_tensor_examples(self):
         """ For dataset samples """
-        cache_path = self.get_cache_path()
-        if self.dataset != 'ontonotes':
+        if self.testset != 'none' and self.testset != self.config['dataset']:
+            cache_path = self.get_cache_path(dataset=self.testset, domain='ood')
+            if self.testset == 'ontonotes':
+                to_add = ''
+            elif self.testset == 'ontogum':
+                to_add = 'gum.'
             self.tensor_samples = {}
             tensorizer = Tensorizer(self.config, self.tokenizer)
             paths = {
-                'tst': join(self.data_dir, self.dataset, f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
+                'tst': join(self.data_dir, self.testset, f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
-                'tst': join(self.data_dir, self.dataset + '_' + self.config["singleton_suffix"], f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
+                'tst': join(self.data_dir, self.testset + '_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
             for split, path in paths.items():
                 logger.info('Tensorizing examples from %s; results will be cached)' % path)
@@ -52,12 +56,13 @@ class CorefDataProcessor:
                 with open(sg_path, 'r') as f:
                     sg_samples = [json.loads(line) for line in f.readlines()]
                 tensor_samples = [tensorizer.tensorize_example(samples[i], sg_samples[i], is_training) for i in range(len(samples))]
-                self.tensor_samples[split] = [(doc_key, self.convert_to_torch_tensor(*tensor)) for doc_key, tensor
-                                              in tensor_samples]
+                self.tensor_samples[split] = [(doc_key, self.convert_to_torch_tensor(*tensor)) for doc_key, tensor in tensor_samples]
             self.stored_info = tensorizer.stored_info
             # Cache tensorized samples
             with open(cache_path, 'wb') as f:
                 pickle.dump((self.tensor_samples, self.stored_info), f)
+
+        cache_path = self.get_cache_path(dataset=self.config['dataset'], domain='ind')
         if os.path.exists(cache_path):
             # Load cached tensors if exists
             with open(cache_path, 'rb') as f:
@@ -68,22 +73,18 @@ class CorefDataProcessor:
             self.tensor_samples = {}
             tensorizer = Tensorizer(self.config, self.tokenizer)
             if self.config['dataset'] == 'ontonotes':
-                to_add = 'train'
+                to_add = ''
             else:
-                to_add = 'train.gum'
+                to_add = 'gum.'
             paths = {
-                'trn': join(self.data_dir, self.config['dataset'], f'{to_add}.{self.language}.{self.max_seg_len}.jsonlines'),
-                # 'dev': join(self.data_dir, self.config['dataset'], f'dev.{self.language}.{self.max_seg_len}.jsonlines'),
-                # 'tst': join(self.data_dir, self.config['dataset'], f'test.{self.language}.{self.max_seg_len}.jsonlines')
-                'dev': join(self.data_dir, 'ontogum', f'dev.gum.{self.language}.{self.max_seg_len}.jsonlines'),
-                'tst': join(self.data_dir, 'ontogum', f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
+                'trn': join(self.data_dir, self.config['dataset'], f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                'dev': join(self.data_dir, 'ontogum', f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                'tst': join(self.data_dir, 'ontogum', f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
-                'trn': join(self.data_dir, self.config['dataset']+'_sg', f'{to_add}.{self.language}.{self.max_seg_len}.jsonlines'),
-                # 'dev': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'dev_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines'),
-                # 'tst': join(self.data_dir, self.config['dataset']+'_'+self.config["singleton_suffix"], f'test_{self.config["singleton_suffix"]}.{self.language}.{self.max_seg_len}.jsonlines')
-                'dev': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'dev.gum.{self.language}.{self.max_seg_len}.jsonlines'),
-                'tst': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'test.gum.{self.language}.{self.max_seg_len}.jsonlines')
+                'trn': join(self.data_dir, self.config['dataset']+'_sg', f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                'dev': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                'tst': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
             for split, path in paths.items():
                 logger.info('Tensorizing examples from %s; results will be cached)' % path)
@@ -126,8 +127,8 @@ class CorefDataProcessor:
                is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, \
                gold_starts, gold_ends, gold_mention_cluster_map,
 
-    def get_cache_path(self):
-        cache_path = join(self.data_dir, f'cached.tensors.{self.dataset}.{self.language}.{self.max_seg_len}.{self.max_training_seg}.bin')
+    def get_cache_path(self, dataset, domain):
+        cache_path = join(self.data_dir, f'cached.tensors.{domain}.{dataset}.{self.language}.{self.max_seg_len}.{self.max_training_seg}.bin')
         return cache_path
 
 
