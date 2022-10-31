@@ -26,7 +26,7 @@ class CorefModel(nn.Module):
         self.max_span_width = config['max_span_width']
         self.emb_sg_size = config['emb_sg_size']
         assert config['loss_type'] in ['marginalized', 'hinge']
-        assert config['sg_type'] in ['ffnn', 'hard_encode']
+        assert config['sg_type'] in ['ffnn', 'hard_encode', 'none']
         if config['coref_depth'] > 1 or config['higher_order'] == 'cluster_merging':
             assert config['fine_grained']  # Higher-order is in slow fine-grained scoring
 
