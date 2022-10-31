@@ -391,7 +391,6 @@ class CorefModel(nn.Module):
                 loss_mention = loss_mention * conf['mention_loss_coef']
             loss += loss_mention
 
-        loss_sg = torch.zeros(1)[0]
         # Add singleton loss
         if conf['model_type'] != 'fast' and conf['sg_type'] != 'none':
             gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
@@ -428,7 +427,11 @@ class CorefModel(nn.Module):
                     logger.info('loss: %.4f' % loss)
         self.update_steps += 1
 
-        return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedent_idx, top_antecedent_scores], [loss_coref, loss_sg]
+        if conf['sg_type'] == 'none':
+            l = [loss_coref]
+        else:
+            l = [loss_coref, loss_sg]
+        return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedent_idx, top_antecedent_scores], l
 
     def _extract_top_spans(self, candidate_idx_sorted, candidate_starts, candidate_ends, num_top_spans):
         """ Keep top non-cross-overlapping candidates ordered by scores; compute on CPU because of loop """
