@@ -153,10 +153,11 @@ class Runner:
                     loss_during_report += effective_loss
                     loss_history.append(effective_loss)
 
-                    # Update task weights
-                    cost[0] = task_loss[0].item()
-                    cost[1] = task_loss[1].item()
-                    avg_cost[epo, :] += cost / len(examples_train)
+                    if conf['weight'] == 'dwa':
+                        # Update task weights
+                        cost[0] = task_loss[0].item()
+                        cost[1] = task_loss[1].item()
+                        avg_cost[epo, :] += cost / len(examples_train)
 
                     # Report
                     if len(loss_history) % conf['report_frequency'] == 0:
