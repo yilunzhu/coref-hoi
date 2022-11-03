@@ -360,7 +360,7 @@ class CorefModel(nn.Module):
             log_norm = torch.logsumexp(top_antecedent_scores, dim=1)
             loss = torch.sum(log_norm - log_marginalized_antecedent_scores)
             # if conf['weight'] != 'dwa':
-            loss = loss * (1 - conf['sg_loss_coef'])
+            loss = loss * conf['coref_loss_coef']
             # loss = loss_coref.detach().clone()
         elif conf['loss_type'] == 'hinge':
             top_antecedent_mask = torch.cat([torch.ones(num_top_spans, 1, dtype=torch.bool, device=device), top_antecedent_mask], dim=1)

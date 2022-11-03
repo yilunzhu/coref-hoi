@@ -18,7 +18,7 @@ def evaluate(config_name, gpu_id, saved_suffix, dataset, conll_test_path):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument("--config", default="train_spanbert_large_ml0_d2")
+    parser.add_argument("--config", default="train_mtl")
     parser.add_argument("--checkpoint")
     parser.add_argument("--gpu", default=0, type=int)
     parser.add_argument("--dataset", default="ontonotes", help="Select from ['ontonotes', 'ontogum']")
