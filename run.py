@@ -230,7 +230,7 @@ class Runner:
         optimizers = [
             AdamW(grouped_bert_param, lr=self.config['bert_learning_rate'], eps=self.config['adam_eps']),
             Adam(model.get_params()[1], lr=self.config['task_learning_rate'], eps=self.config['adam_eps'], weight_decay=0),
-            Adam(model.get_params()[1], lr=self.config['aux_task_learning_rate'], eps=self.config['adam_eps'], weight_decay=0)
+            Adam(model.get_params()[2], lr=self.config['aux_task_learning_rate'], eps=self.config['adam_eps'], weight_decay=0)
 
         ]
         return optimizers
@@ -270,9 +270,13 @@ class Runner:
         def lr_lambda_task(current_step):
             return max(0.0, float(total_update_steps - current_step) / float(max(1, total_update_steps)))
 
+        def lr_lambda_aux_task(current_step):
+            return max(0.0, float(total_update_steps - current_step) / float(max(1, total_update_steps)))
+
         schedulers = [
             LambdaLR(optimizers[0], lr_lambda_bert),
-            LambdaLR(optimizers[1], lr_lambda_task)
+            LambdaLR(optimizers[1], lr_lambda_task),
+            LambdaLR(optimizers[1], lr_lambda_aux_task)
         ]
         return schedulers
         # return LambdaLR(optimizer, [lr_lambda_bert, lr_lambda_bert, lr_lambda_task, lr_lambda_task])

@@ -359,9 +359,9 @@ class CorefModel(nn.Module):
         # Get loss
         top_antecedent_scores = torch.cat([torch.zeros(num_top_spans, 1, device=device), top_pairwise_scores], dim=1)
         if conf['loss_type'] == 'marginalized':
-            log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1) * (1 - conf['sg_loss_coef'])
-            log_norm = torch.logsumexp(top_antecedent_scores, dim=1) * (1 - conf['sg_loss_coef'])
-            loss = torch.sum(log_norm - log_marginalized_antecedent_scores)
+            log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1)
+            log_norm = torch.logsumexp(top_antecedent_scores, dim=1)
+            loss = torch.sum(log_norm - log_marginalized_antecedent_scores) * (1 - conf['sg_loss_coef'])
         elif conf['loss_type'] == 'hinge':
             top_antecedent_mask = torch.cat([torch.ones(num_top_spans, 1, dtype=torch.bool, device=device), top_antecedent_mask], dim=1)
             top_antecedent_scores += torch.log(top_antecedent_mask.to(torch.float))
