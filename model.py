@@ -26,7 +26,7 @@ class CorefModel(nn.Module):
         self.max_span_width = config['max_span_width']
         self.emb_sg_size = config['emb_sg_size']
         assert config['loss_type'] in ['marginalized', 'hinge']
-        assert config['sg_type'] in ['ffnn', 'hard_encode', 'none']
+        assert config['sg_type'] in ['ffnn', 'hard_encode',' none']
         if config['coref_depth'] > 1 or config['higher_order'] == 'cluster_merging':
             assert config['fine_grained']  # Higher-order is in slow fine-grained scoring
 
@@ -166,7 +166,7 @@ class CorefModel(nn.Module):
             candidate_labels = torch.matmul(torch.unsqueeze(gold_mention_cluster_map, 0).to(torch.float), same_span.to(torch.float))
             candidate_labels = torch.squeeze(candidate_labels.to(torch.long), 0) # [num candidates]; non-gold span has label 0
 
-            if conf['model_type'] != 'fast' and conf['sg_type'] != 'none':
+            if conf['model_type'] != 'fast':
                 same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
                 same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
                 same_sg_span = (same_sg_start & same_sg_end).to(torch.long)
@@ -190,6 +190,9 @@ class CorefModel(nn.Module):
             candidate_width_emb = self.dropout(candidate_width_emb)
             candidate_emb_list.append(candidate_width_emb)
 
+            # if conf['model_type'] != 'fast':
+            #     candidate_sg_emb = self.emb_sg(sg_labels)
+            #     candidate_emb_list.append(candidate_sg_emb)
         # Use attended head or avg token
         candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)
         candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
@@ -217,8 +220,7 @@ class CorefModel(nn.Module):
                 width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
                 candidate_width_score = width_score[candidate_width_idx]
                 candidate_mention_scores += candidate_width_score
-                if conf['sg_type'] != 'none':
-                    candidate_sg_scores += candidate_width_score
+                candidate_sg_scores += candidate_width_score
 
         # Extract top spans
         if conf['model_type'] == 'fast':
@@ -237,6 +239,10 @@ class CorefModel(nn.Module):
             candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
             candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
             num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
+            # if do_loss:
+            #     num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
+            # else:
+            #     num_top_spans = int(min(conf['max_num_extracted_spans'], candidate_mention_scores[candidate_mention_scores>conf['mention_threshold']].size(0), len(candidate_starts_cpu)))
             selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
             assert len(selected_idx_cpu) == num_top_spans
             selected_idx = torch.tensor(selected_idx_cpu, device=device)
@@ -244,9 +250,8 @@ class CorefModel(nn.Module):
             top_span_emb = candidate_span_emb[selected_idx]
             top_span_cluster_ids = candidate_labels[selected_idx] if do_loss else None
             top_span_mention_scores = candidate_mention_scores[selected_idx]
-            if conf['sg_type'] != 'none':
-                top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
-                top_span_sg_scores = candidate_sg_scores[selected_idx]
+            top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
+            top_span_sg_scores = candidate_sg_scores[selected_idx]
 
         # Coarse pruning on each mention's antecedents
         max_top_antecedents = min(num_top_spans, conf['max_top_antecedents'])
@@ -261,12 +266,10 @@ class CorefModel(nn.Module):
         if conf['model_type'] == 'fast':
             pairwise_fast_scores = pairwise_mention_score_sum
         else:
-            if conf['sg_type'] != 'none':
-                pairwise_sg_score_sum = torch.unsqueeze(top_span_sg_scores, 1) + torch.unsqueeze(top_span_sg_scores, 0)
-                pairwise_sg_score_sum[pairwise_sg_score_sum<0] = 0
-                pairwise_fast_scores = (1 - conf["sg_score_coef"]) * pairwise_mention_score_sum + conf["sg_score_coef"] * pairwise_sg_score_sum
-            else:
-                pairwise_fast_scores = pairwise_mention_score_sum
+            pairwise_sg_score_sum = torch.unsqueeze(top_span_sg_scores, 1) + torch.unsqueeze(top_span_sg_scores, 0)
+            pairwise_sg_score_sum[pairwise_sg_score_sum<0] = 0
+            # pairwise_fast_scores -= conf["sg_score_coef"] * (1 - pairwise_sg_score_sum)
+            pairwise_fast_scores = (1 - conf["sg_score_coef"]) * pairwise_mention_score_sum + conf["sg_score_coef"] * pairwise_sg_score_sum
         pairwise_fast_scores += pairwise_coref_scores
         pairwise_fast_scores += torch.log(antecedent_mask.to(torch.float))
         if conf['use_distance_prior']:
@@ -357,11 +360,8 @@ class CorefModel(nn.Module):
         top_antecedent_scores = torch.cat([torch.zeros(num_top_spans, 1, device=device), top_pairwise_scores], dim=1)
         if conf['loss_type'] == 'marginalized':
             log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1) * (1 - conf['sg_loss_coef'])
-            log_norm = torch.logsumexp(top_antecedent_scores, dim=1)
+            log_norm = torch.logsumexp(top_antecedent_scores, dim=1) * (1 - conf['sg_loss_coef'])
             loss = torch.sum(log_norm - log_marginalized_antecedent_scores)
-            # if conf['weight'] != 'dwa':
-            loss = loss * (1 - conf['sg_loss_coef'])
-            # loss = loss_coref.detach().clone()
         elif conf['loss_type'] == 'hinge':
             top_antecedent_mask = torch.cat([torch.ones(num_top_spans, 1, dtype=torch.bool, device=device), top_antecedent_mask], dim=1)
             top_antecedent_scores += torch.log(top_antecedent_mask.to(torch.float))
@@ -375,25 +375,21 @@ class CorefModel(nn.Module):
             delta = ((3 - conf['false_new_delta']) / 2) * torch.ones(num_top_spans, dtype=torch.float, device=device)
             delta -= (1 - conf['false_new_delta']) * mistake_false_new.to(torch.float)
             delta *= torch.logical_not(highest_antecedent_is_gold).to(torch.float)
-            loss_coref = torch.sum(slack_hinge * delta)
-            loss = loss_coref
+            loss = torch.sum(slack_hinge * delta)
 
         # Add mention loss
         if conf['mention_loss_coef']:
             gold_mention_scores = top_span_mention_scores[top_span_cluster_ids > 0]
             non_gold_mention_scores = top_span_mention_scores[top_span_cluster_ids == 0]
-            loss_mention = -torch.sum(torch.log(torch.sigmoid(gold_mention_scores)))
-            loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_mention_scores)))
-            if conf['weight'] != 'dwa':
-                loss_mention = loss_mention * conf['mention_loss_coef']
+            loss_mention = -torch.sum(torch.log(torch.sigmoid(gold_mention_scores))) * conf['mention_loss_coef']
+            loss_mention += -torch.sum(torch.log(1 - torch.sigmoid(non_gold_mention_scores))) * conf['mention_loss_coef']
             loss += loss_mention
 
         # Add singleton loss
-        if conf['model_type'] != 'fast' and conf['sg_type'] != 'none':
+        if conf['model_type'] != 'fast' and conf['sg_loss_coef']:
             gold_sg_scores = top_span_sg_scores[top_span_sg_ids > 0]
             non_gold_sg_scores = top_span_sg_scores[top_span_sg_ids == 0]
             loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) + -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores)))
-            # if conf['weight'] != 'dwa':
             loss_sg = loss_sg * conf['sg_loss_coef']
             loss += loss_sg
 
@@ -416,7 +412,7 @@ class CorefModel(nn.Module):
                 logger.info('spans/gold: %d/%d; ratio: %.2f' % (num_top_spans, (top_span_cluster_ids > 0).sum(), (top_span_cluster_ids > 0).sum()/num_top_spans))
                 if conf['mention_loss_coef']:
                     logger.info('mention loss: %.4f' % loss_mention)
-                if conf['sg_type'] != 'none':
+                if conf['sg_loss_coef']:
                     logger.info('mention loss: %.4f' % loss_sg)
                 if conf['loss_type'] == 'marginalized':
                     logger.info('norm/gold: %.4f/%.4f; loss: %.4f' % (torch.sum(log_norm), torch.sum(log_marginalized_antecedent_scores), loss))
