@@ -276,7 +276,7 @@ class Runner:
         schedulers = [
             LambdaLR(optimizers[0], lr_lambda_bert),
             LambdaLR(optimizers[1], lr_lambda_task),
-            LambdaLR(optimizers[1], lr_lambda_aux_task)
+            LambdaLR(optimizers[2], lr_lambda_aux_task)
         ]
         return schedulers
         # return LambdaLR(optimizer, [lr_lambda_bert, lr_lambda_bert, lr_lambda_task, lr_lambda_task])
