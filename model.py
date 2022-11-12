@@ -26,7 +26,7 @@ class CorefModel(nn.Module):
         self.max_span_width = config['max_span_width']
         self.emb_sg_size = config['emb_sg_size']
         assert config['loss_type'] in ['marginalized', 'hinge']
-        assert config['sg_type'] in ['ffnn', 'hard_encode',' none']
+        assert config['sg_type'] in ['ffnn', 'hard_encode', 'none']
         if config['coref_depth'] > 1 or config['higher_order'] == 'cluster_merging':
             assert config['fine_grained']  # Higher-order is in slow fine-grained scoring
 
@@ -38,7 +38,6 @@ class CorefModel(nn.Module):
         self.span_emb_size = self.bert_emb_size * 3
         if config['use_features']:
             self.span_emb_size += config['feature_emb_size']
-            # self.span_emb_size += config['emb_sg_size']
         self.pair_emb_size = self.span_emb_size * 3
         if config['use_metadata']:
             self.pair_emb_size += 2 * config['feature_emb_size']
@@ -47,7 +46,6 @@ class CorefModel(nn.Module):
         if config['use_segment_distance']:
             self.pair_emb_size += config['feature_emb_size']
 
-        # self.emb_sg = self.make_embedding(self.emb_sg_size) if config['use_features'] else None
         self.emb_span_width = self.make_embedding(self.max_span_width) if config['use_features'] else None
         self.emb_span_width_prior = self.make_embedding(self.max_span_width) if config['use_width_prior'] else None
         self.emb_antecedent_distance_prior = self.make_embedding(10) if config['use_distance_prior'] else None
@@ -108,13 +106,13 @@ class CorefModel(nn.Module):
             if name.startswith('bert'):
                 to_add = (name, param) if named else param
                 bert_based_param.append(to_add)
-            elif '_sg_' in name:
-                to_add = (name, param) if named else param
-                aux_task_param.append(to_add)
+            # elif '_sg_' in name:
+            #     to_add = (name, param) if named else param
+            #     aux_task_param.append(to_add)
             else:
                 to_add = (name, param) if named else param
                 task_param.append(to_add)
-        return bert_based_param, task_param, aux_task_param
+        return bert_based_param, task_param
 
     def forward(self, *input):
         return self.get_predictions_and_loss(*input)
@@ -212,10 +210,10 @@ class CorefModel(nn.Module):
             candidate_mention_scores = self.ms_weight.expand(num_span).to(device)
         else:
             candidate_mention_scores = torch.squeeze(self.span_emb_score_ffnn(candidate_span_emb), 1)
-            if conf['sg_type'] == 'ffnn':
-                candidate_sg_scores = torch.squeeze(self.span_emb_sg_score_ffnn(candidate_span_emb), 1)
-            elif conf['sg_type'] == 'hard_encode':
+            if conf['sg_type'] != 'hard_encode':
                 candidate_sg_scores = (sg_labels>0).to(torch.float)
+            else:
+                candidate_sg_scores = torch.squeeze(self.span_emb_sg_score_ffnn(candidate_span_emb), 1)
             if conf['use_width_prior']:
                 width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
                 candidate_width_score = width_score[candidate_width_idx]
