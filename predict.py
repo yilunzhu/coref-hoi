@@ -33,9 +33,9 @@ def get_document_from_string(string, seg_len, bert_tokenizer, spacy_tokenizer, g
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config_name', type=str, required=True,
+    parser.add_argument('--config', type=str, required=True,
                         help='Configuration name in experiments.conf')
-    parser.add_argument('--model_identifier', type=str, required=True,
+    parser.add_argument('--checkpoint', type=str, required=True,
                         help='Model identifier to load')
     parser.add_argument('--gpu_id', type=int, default=None,
                         help='GPU id; CPU by default')
@@ -45,11 +45,12 @@ if __name__ == '__main__':
     parser.add_argument('--output_path', type=str, default=None,
                         help='Path to save output')
     parser.add_argument('--flag', type=str, default='sg_pred')
+    parser.add_argument("--dataset", default="ontonotes", help="Select from ['ontonotes', 'ontogum']")
     args = parser.parse_args()
 
-    runner = Runner(args.config_name, args.gpu_id)
-    model = runner.initialize_model(args.model_identifier)
-    data_processor = CorefDataProcessor(runner.config)
+    runner = Runner(args.config, args.gpu_id)
+    model = runner.initialize_model(args.checkpoint)
+    data_processor = CorefDataProcessor(runner.config, args.dataset)
 
     if args.jsonlines_path:
         # Input from file
