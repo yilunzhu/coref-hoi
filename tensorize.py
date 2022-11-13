@@ -39,14 +39,37 @@ class CorefDataProcessor:
                 to_add = ''
             elif self.testset == 'ontogum':
                 to_add = 'gum.'
-            self.tensor_samples = {}
-            tensorizer = Tensorizer(self.config, self.tokenizer)
             paths = {
                 'tst': join(self.data_dir, self.testset, f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
                 'tst': join(self.data_dir, self.testset + '_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
+        else:
+            cache_path = self.get_cache_path(dataset=self.config['dataset'], domain='ind')
+            if self.config['dataset'] == 'ontonotes':
+                to_add = ''
+            else:
+                to_add = 'gum.'
+                paths = {
+                    'trn': join(self.data_dir, self.config['dataset'], f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                    'dev': join(self.data_dir, 'ontogum', f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                    'tst': join(self.data_dir, 'ontogum', f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
+                }
+                singleton_paths = {
+                    'trn': join(self.data_dir, self.config['dataset'] + '_sg', f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                    'dev': join(self.data_dir, 'ontogum_' + self.config["singleton_suffix"], f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                    'tst': join(self.data_dir, 'ontogum_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
+                }
+        if os.path.exists(cache_path):
+            # Load cached tensors if exists
+            with open(cache_path, 'rb') as f:
+                self.tensor_samples, self.stored_info = pickle.load(f)
+                logger.info('Loaded tensorized examples from cache')
+        else:
+            # Generate tensorized samples
+            self.tensor_samples = {}
+            tensorizer = Tensorizer(self.config, self.tokenizer)
             for split, path in paths.items():
                 logger.info('Tensorizing examples from %s; results will be cached)' % path)
                 is_training = (split == 'trn')
@@ -57,46 +80,6 @@ class CorefDataProcessor:
                     sg_samples = [json.loads(line) for line in f.readlines()]
                 tensor_samples = [tensorizer.tensorize_example(samples[i], sg_samples[i], is_training) for i in range(len(samples))]
                 self.tensor_samples[split] = [(doc_key, self.convert_to_torch_tensor(*tensor)) for doc_key, tensor in tensor_samples]
-            self.stored_info = tensorizer.stored_info
-            # Cache tensorized samples
-            with open(cache_path, 'wb') as f:
-                pickle.dump((self.tensor_samples, self.stored_info), f)
-
-        cache_path = self.get_cache_path(dataset=self.config['dataset'], domain='ind')
-        if os.path.exists(cache_path):
-            # Load cached tensors if exists
-            with open(cache_path, 'rb') as f:
-                self.tensor_samples, self.stored_info = pickle.load(f)
-                logger.info('Loaded tensorized examples from cache')
-        else:
-            # Generate tensorized samples
-            self.tensor_samples = {}
-            tensorizer = Tensorizer(self.config, self.tokenizer)
-            if self.config['dataset'] == 'ontonotes':
-                to_add = ''
-            else:
-                to_add = 'gum.'
-            paths = {
-                'trn': join(self.data_dir, self.config['dataset'], f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
-                'dev': join(self.data_dir, 'ontogum', f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
-                'tst': join(self.data_dir, 'ontogum', f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
-            }
-            singleton_paths = {
-                'trn': join(self.data_dir, self.config['dataset']+'_sg', f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
-                'dev': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
-                'tst': join(self.data_dir, 'ontogum_'+self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
-            }
-            for split, path in paths.items():
-                logger.info('Tensorizing examples from %s; results will be cached)' % path)
-                is_training = (split == 'trn')
-                sg_path = singleton_paths[split]
-                with open(path, 'r') as f:
-                    samples = [json.loads(line) for line in f.readlines()]
-                with open(sg_path, 'r') as f:
-                    sg_samples = [json.loads(line) for line in f.readlines()]
-                tensor_samples = [tensorizer.tensorize_example(samples[i], sg_samples[i], is_training) for i in range(len(samples))]
-                self.tensor_samples[split] = [(doc_key, self.convert_to_torch_tensor(*tensor)) for doc_key, tensor
-                                              in tensor_samples]
             self.stored_info = tensorizer.stored_info
             # Cache tensorized samples
             with open(cache_path, 'wb') as f:
