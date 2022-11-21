@@ -72,6 +72,7 @@ if __name__ == '__main__':
                 for i, doc in enumerate(docs):
                     doc['predicted_clusters'] = predicted_clusters[i]
                     f.write(json.dumps(doc))
+                    f.write('\n')
             print(f'Saved prediction in {args.output_path}')
     else:
         # Interactive input

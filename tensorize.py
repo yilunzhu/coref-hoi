@@ -57,7 +57,7 @@ class CorefDataProcessor:
                     'tst': join(self.data_dir, 'ontogum', f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
                 }
                 singleton_paths = {
-                    'trn': join(self.data_dir, self.config['dataset'] + '_sg', f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                    'trn': join(self.data_dir, self.config['dataset'] + '_' + self.config["singleton_suffix"], f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
                     'dev': join(self.data_dir, 'ontogum_' + self.config["singleton_suffix"], f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
                     'tst': join(self.data_dir, 'ontogum_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
                 }
@@ -92,7 +92,7 @@ class CorefDataProcessor:
     @classmethod
     def convert_to_torch_tensor(cls, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                 is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map,
-                                gold_starts, gold_ends, gold_mention_cluster_map):
+                                gold_starts, gold_ends, gold_entities, gold_mention_cluster_map):
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         input_mask = torch.tensor(input_mask, dtype=torch.long)
         speaker_ids = torch.tensor(speaker_ids, dtype=torch.long)
@@ -106,9 +106,11 @@ class CorefDataProcessor:
         gold_sg_ends = torch.tensor(gold_sg_ends, dtype=torch.long)
         gold_mention_cluster_map = torch.tensor(gold_mention_cluster_map, dtype=torch.long)
         gold_sg_cluster_map = torch.tensor(gold_sg_cluster_map, dtype=torch.long)
+        gold_entities = torch.tensor(gold_entities, dtype=torch.long)
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
                is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, \
-               gold_starts, gold_ends, gold_mention_cluster_map,
+               gold_starts, gold_ends, gold_entities, gold_mention_cluster_map
+
 
     def get_cache_path(self, dataset, domain):
         cache_path = join(self.data_dir, f'cached.tensors.{domain}.{dataset}.{self.language}.{self.max_seg_len}.{self.max_training_seg}.bin')
@@ -158,6 +160,7 @@ class Tensorizer:
         gold_singletons = sorted(tuple(sg) for sg in util.flatten(sg_clusters))
         gold_mention_map = {mention: idx for idx, mention in enumerate(gold_mentions)}
         gold_mention_cluster_map = np.zeros(len(gold_mentions))  # 0: no cluster
+        entity = sg_example['entity']
         for cluster_id, cluster in enumerate(clusters):
             for mention in cluster:
                 gold_mention_cluster_map[gold_mention_map[tuple(mention)]] = cluster_id + 1
@@ -207,8 +210,15 @@ class Tensorizer:
         genre = self.stored_info['genre_dict'].get(doc_key[:2], 0)
         gold_starts, gold_ends = self._tensorize_spans(gold_mentions)
         gold_sg_starts, gold_sg_ends = self._tensorize_spans(gold_singletons)
+
+        # Construct entity info, mapping entity types to each gold span
+        # list -> dict, mapping each span to entity category
+        span2entity = {(e[0], e[1]): e[2] for e in entity}
+        gold_entities = np.array([span2entity[span] for span in gold_singletons])
+
         example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                          gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_mention_cluster_map)
+                          gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities,
+                          gold_mention_cluster_map)
 
         if is_training and len(sentences) > self.config['max_training_sentences']:
             return doc_key, self.truncate_example(*example_tensor)
@@ -216,8 +226,8 @@ class Tensorizer:
             return doc_key, example_tensor
 
     def truncate_example(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                         gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_mention_cluster_map,
-                         sentence_offset=None):
+                         gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities,
+                         gold_mention_cluster_map, sentence_offset=None):
         max_sentences = self.config["max_training_sentences"]
         num_sentences = input_ids.shape[0]
         assert num_sentences > max_sentences
@@ -244,5 +254,9 @@ class Tensorizer:
         gold_sg_ends = gold_sg_ends[gold_sg_spans] - word_offset
         gold_sg_cluster_map = gold_sg_cluster_map[gold_sg_spans]
 
+        gold_entities = gold_entities[gold_sg_spans]
+
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
-               is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_mention_cluster_map
+               is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, \
+               gold_mention_cluster_map
+

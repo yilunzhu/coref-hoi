@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import BertModel
 import util
 import logging
@@ -22,6 +23,7 @@ class CorefModel(nn.Module):
         self.device = device
 
         self.num_genres = num_genres if num_genres else len(config['genres'])
+        self.num_entity_types = config['num_entity_types']
         self.max_seg_len = config['max_segment_len']
         self.max_span_width = config['max_span_width']
         self.emb_sg_size = config['emb_sg_size']
@@ -58,6 +60,8 @@ class CorefModel(nn.Module):
         self.mention_token_attn = self.make_ffnn(self.bert_emb_size, 0, output_size=1) if config['model_heads'] else None
         self.span_emb_score_ffnn = self.make_ffnn(self.span_emb_size, [config['ffnn_size']] * config['ffnn_depth'], output_size=1)
         self.span_emb_sg_score_ffnn = self.make_ffnn(self.span_emb_size, [config['ffnn_size']] * config['ffnn_depth'], output_size=1)
+        if config['mtl_entity']:
+            self.entity_score_ffnn = self.make_ffnn(self.span_emb_size, [config['ffnn_size']] * config['ffnn_depth'], output_size=self.num_entity_types)
 
         self.span_width_score_ffnn = self.make_ffnn(config['feature_emb_size'], [config['ffnn_size']] * config['ffnn_depth'], output_size=1) if config['use_width_prior'] else None
         self.coarse_bilinear = self.make_ffnn(self.span_emb_size, 0, output_size=self.span_emb_size)
@@ -67,6 +71,8 @@ class CorefModel(nn.Module):
         self.gate_ffnn = self.make_ffnn(2 * self.span_emb_size, 0, output_size=self.span_emb_size) if config['coref_depth'] > 1 else None
         self.span_attn_ffnn = self.make_ffnn(self.span_emb_size, 0, output_size=1) if config['higher_order'] == 'span_clustering' else None
         self.cluster_score_ffnn = self.make_ffnn(3 * self.span_emb_size + config['feature_emb_size'], [config['cluster_ffnn_size']] * config['ffnn_depth'], output_size=1) if config['higher_order'] == 'cluster_merging' else None
+
+        self.cross_entropy_loss = nn.CrossEntropyLoss()
 
         self.update_steps = 0  # Internal use for debug
         self.debug = True
@@ -119,7 +125,8 @@ class CorefModel(nn.Module):
 
     def get_predictions_and_loss(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                  is_training, gold_sg_starts=None, gold_sg_ends=None, gold_sg_cluster_map=None,
-                                 gold_starts=None, gold_ends=None, gold_mention_cluster_map=None):
+                                 gold_starts=None, gold_ends=None, gold_entities=None,
+                                 gold_mention_cluster_map=None):
         """ Model and input are already on the device """
         device = self.device
         conf = self.config
@@ -171,6 +178,12 @@ class CorefModel(nn.Module):
                 sg_labels = torch.matmul(torch.unsqueeze(gold_sg_cluster_map, 0).to(torch.float), same_sg_span.to(torch.float))
                 sg_labels = torch.squeeze(sg_labels.to(torch.long), 0)
                 sg_labels = (sg_labels >= 1).to(torch.long)
+
+                if conf['mtl_entity']:  # add entity type labels
+                    entity_labels = torch.matmul(torch.unsqueeze(gold_entities, 0).to(torch.float), same_sg_span.to(torch.float))
+                    entity_labels = torch.squeeze(entity_labels.to(torch.long), 0)
+                    entity_labels = (entity_labels >= 1).to(torch.long)
+
         elif conf['model_type'] != 'fast' and conf['sg_type'] == 'hard_encode':
             same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
             same_sg_end = (torch.unsqueeze(gold_sg_ends, 1) == torch.unsqueeze(candidate_ends, 0))
@@ -188,9 +201,6 @@ class CorefModel(nn.Module):
             candidate_width_emb = self.dropout(candidate_width_emb)
             candidate_emb_list.append(candidate_width_emb)
 
-            # if conf['model_type'] != 'fast':
-            #     candidate_sg_emb = self.emb_sg(sg_labels)
-            #     candidate_emb_list.append(candidate_sg_emb)
         # Use attended head or avg token
         candidate_tokens = torch.unsqueeze(torch.arange(0, num_words, device=device), 0).repeat(num_candidates, 1)
         candidate_tokens_mask = (candidate_tokens >= torch.unsqueeze(candidate_starts, 1)) & (candidate_tokens <= torch.unsqueeze(candidate_ends, 1))
@@ -214,11 +224,17 @@ class CorefModel(nn.Module):
                 candidate_sg_scores = (sg_labels>0).to(torch.float)
             else:
                 candidate_sg_scores = torch.squeeze(self.span_emb_sg_score_ffnn(candidate_span_emb), 1)
+
+            if conf['mtl_entity']:
+                candidate_entity_logits = torch.squeeze(self.entity_score_ffnn(candidate_span_emb))
+
             if conf['use_width_prior']:
                 width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
                 candidate_width_score = width_score[candidate_width_idx]
                 candidate_mention_scores += candidate_width_score
                 candidate_sg_scores += candidate_width_score
+                if conf['mtl_entity']:
+                    candidate_entity_logits += candidate_width_score.unsqueeze(1).expand(-1, self.num_entity_types)
 
         # Extract top spans
         if conf['model_type'] == 'fast':
@@ -237,10 +253,6 @@ class CorefModel(nn.Module):
             candidate_idx_sorted_by_score = torch.argsort(candidate_mention_scores, descending=True).tolist()
             candidate_starts_cpu, candidate_ends_cpu = candidate_starts.tolist(), candidate_ends.tolist()
             num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
-            # if do_loss:
-            #     num_top_spans = int(min(conf['max_num_extracted_spans'], conf['top_span_ratio'] * num_words, len(candidate_starts_cpu)))
-            # else:
-            #     num_top_spans = int(min(conf['max_num_extracted_spans'], candidate_mention_scores[candidate_mention_scores>conf['mention_threshold']].size(0), len(candidate_starts_cpu)))
             selected_idx_cpu = self._extract_top_spans(candidate_idx_sorted_by_score, candidate_starts_cpu, candidate_ends_cpu, num_top_spans)
             assert len(selected_idx_cpu) == num_top_spans
             selected_idx = torch.tensor(selected_idx_cpu, device=device)
@@ -250,6 +262,9 @@ class CorefModel(nn.Module):
             top_span_mention_scores = candidate_mention_scores[selected_idx]
             top_span_sg_ids = sg_labels[selected_idx] if do_loss else None
             top_span_sg_scores = candidate_sg_scores[selected_idx]
+            if conf['mtl_entity']:
+                top_span_entity_logits = candidate_entity_logits[selected_idx]
+                top_span_entity_labels = entity_labels[selected_idx] if do_loss else None
 
         # Coarse pruning on each mention's antecedents
         max_top_antecedents = min(num_top_spans, conf['max_top_antecedents'])
@@ -359,7 +374,7 @@ class CorefModel(nn.Module):
         if conf['loss_type'] == 'marginalized':
             log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1)
             log_norm = torch.logsumexp(top_antecedent_scores, dim=1)
-            loss = torch.sum(log_norm - log_marginalized_antecedent_scores) * (1 - conf['sg_loss_coef'])
+            loss = torch.sum(log_norm - log_marginalized_antecedent_scores) * (1 - conf['sg_loss_coef'] - conf['entity_loss_coef'])
         elif conf['loss_type'] == 'hinge':
             top_antecedent_mask = torch.cat([torch.ones(num_top_spans, 1, dtype=torch.bool, device=device), top_antecedent_mask], dim=1)
             top_antecedent_scores += torch.log(top_antecedent_mask.to(torch.float))
@@ -390,6 +405,12 @@ class CorefModel(nn.Module):
             loss_sg = -torch.sum(torch.log(torch.sigmoid(gold_sg_scores))) + -torch.sum(torch.log(1 - torch.sigmoid(non_gold_sg_scores)))
             loss_sg = loss_sg * conf['sg_loss_coef']
             loss += loss_sg
+
+        # Add entity loss
+        if conf['model_type'] != 'fast' and conf['mtl_entity']:
+            loss_entity = self.cross_entropy_loss(top_span_entity_logits, top_span_entity_labels)
+            loss_entity = loss_entity * conf['entity_loss_coef']
+            loss += loss_entity
 
         if conf['higher_order'] == 'cluster_merging':
             top_pairwise_scores += cluster_merging_scores
