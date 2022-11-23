@@ -162,7 +162,7 @@ class Tensorizer:
         gold_singletons = sorted(tuple(sg) for sg in util.flatten(sg_clusters))
         gold_mention_map = {mention: idx for idx, mention in enumerate(gold_mentions)}
         gold_mention_cluster_map = np.zeros(len(gold_mentions))  # 0: no cluster
-        entity = sg_example['entity']
+        entity = sg_example['entity'] if 'entity' in sg_example else None
         for cluster_id, cluster in enumerate(clusters):
             for mention in cluster:
                 gold_mention_cluster_map[gold_mention_map[tuple(mention)]] = cluster_id + 1
@@ -216,7 +216,7 @@ class Tensorizer:
         # Construct entity info, mapping entity types to each gold span
         # list -> dict, mapping each span to entity category
         span2entity = {(e[0], e[1]): e[2] for e in entity}
-        gold_entities = np.array([span2entity[span] for span in gold_singletons])
+        gold_entities = np.array([span2entity[span] for span in gold_singletons]) if entity else None
 
         example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
                           gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities,
