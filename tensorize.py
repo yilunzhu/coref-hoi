@@ -215,8 +215,11 @@ class Tensorizer:
 
         # Construct entity info, mapping entity types to each gold span
         # list -> dict, mapping each span to entity category
-        span2entity = {(e[0], e[1]): e[2] for e in entity}
-        gold_entities = np.array([span2entity[span] for span in gold_singletons]) if entity else None
+        if entity:
+            span2entity = {(e[0], e[1]): e[2] for e in entity}
+            gold_entities = np.array([span2entity[span] for span in gold_singletons])
+        else:
+            gold_entities = None
 
         example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
                           gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities,
