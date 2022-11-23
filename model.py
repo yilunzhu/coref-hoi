@@ -433,6 +433,8 @@ class CorefModel(nn.Module):
                     logger.info('mention loss: %.4f' % loss_mention)
                 if conf['sg_loss_coef']:
                     logger.info('mention loss: %.4f' % loss_sg)
+                if conf['entity_loss_coef']:
+                    logger.info('entity loss: %.4f' % loss_entity)
                 if conf['loss_type'] == 'marginalized':
                     logger.info('norm/gold: %.4f/%.4f; loss: %.4f' % (torch.sum(log_norm), torch.sum(log_marginalized_antecedent_scores), loss))
                 else:

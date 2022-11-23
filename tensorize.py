@@ -37,6 +37,7 @@ class CorefDataProcessor:
             cache_path = self.get_cache_path(dataset=self.testset, domain='ood')
             if self.testset == 'ontonotes':
                 to_add = ''
+                self.config["singleton_suffix"] = 'sg'
             elif self.testset == 'ontogum':
                 to_add = 'gum.'
             paths = {
@@ -49,18 +50,19 @@ class CorefDataProcessor:
             cache_path = self.get_cache_path(dataset=self.config['dataset'], domain='ind')
             if self.config['dataset'] == 'ontonotes':
                 to_add = ''
+                self.config["singleton_suffix"] = 'sg'
             else:
                 to_add = 'gum.'
-                paths = {
-                    'trn': join(self.data_dir, self.config['dataset'], f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
-                    'dev': join(self.data_dir, 'ontogum', f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
-                    'tst': join(self.data_dir, 'ontogum', f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
-                }
-                singleton_paths = {
-                    'trn': join(self.data_dir, self.config['dataset'] + '_' + self.config["singleton_suffix"], f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
-                    'dev': join(self.data_dir, 'ontogum_' + self.config["singleton_suffix"], f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
-                    'tst': join(self.data_dir, 'ontogum_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
-                }
+            paths = {
+                'trn': join(self.data_dir, self.config['dataset'], f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                'dev': join(self.data_dir, 'ontogum', f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                'tst': join(self.data_dir, 'ontogum', f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
+            }
+            singleton_paths = {
+                'trn': join(self.data_dir, self.config['dataset'] + '_' + self.config["singleton_suffix"], f'train.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                'dev': join(self.data_dir, 'ontogum_' + self.config["singleton_suffix"], f'dev.{to_add}{self.language}.{self.max_seg_len}.jsonlines'),
+                'tst': join(self.data_dir, 'ontogum_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
+            }
         if os.path.exists(cache_path):
             # Load cached tensors if exists
             with open(cache_path, 'rb') as f:
