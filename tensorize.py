@@ -94,7 +94,7 @@ class CorefDataProcessor:
     @classmethod
     def convert_to_torch_tensor(cls, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                 is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map,
-                                gold_starts, gold_ends, gold_entities, gold_mention_cluster_map):
+                                gold_starts, gold_ends, gold_entities, gold_infstat, gold_mention_cluster_map):
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         input_mask = torch.tensor(input_mask, dtype=torch.long)
         speaker_ids = torch.tensor(speaker_ids, dtype=torch.long)
@@ -108,11 +108,11 @@ class CorefDataProcessor:
         gold_sg_ends = torch.tensor(gold_sg_ends, dtype=torch.long)
         gold_mention_cluster_map = torch.tensor(gold_mention_cluster_map, dtype=torch.long)
         gold_sg_cluster_map = torch.tensor(gold_sg_cluster_map, dtype=torch.long)
-        gold_entities = torch.tensor(gold_entities, dtype=torch.long)
+        gold_entities = torch.tensor(gold_entities, dtype=torch.long) if gold_entities is not None else None
+        gold_infstat = torch.tensor(gold_infstat, dtype=torch.long) if gold_infstat is not None else None
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
                is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, \
-               gold_starts, gold_ends, gold_entities, gold_mention_cluster_map
-
+               gold_starts, gold_ends, gold_entities, gold_infstat, gold_mention_cluster_map
 
     def get_cache_path(self, dataset, domain):
         cache_path = join(self.data_dir, f'cached.tensors.{domain}.{dataset}.{self.language}.{self.max_seg_len}.{self.max_training_seg}.bin')
@@ -163,6 +163,7 @@ class Tensorizer:
         gold_mention_map = {mention: idx for idx, mention in enumerate(gold_mentions)}
         gold_mention_cluster_map = np.zeros(len(gold_mentions))  # 0: no cluster
         entity = sg_example['entity'] if 'entity' in sg_example else None
+        infstat = sg_example['infstat'] if 'infstat' in sg_example else None
         for cluster_id, cluster in enumerate(clusters):
             for mention in cluster:
                 gold_mention_cluster_map[gold_mention_map[tuple(mention)]] = cluster_id + 1
@@ -221,8 +222,14 @@ class Tensorizer:
         else:
             gold_entities = None
 
+        if infstat:
+            span2infstat = {(e[0], e[1]): e[2] for e in infstat}
+            gold_infstats = np.array([span2infstat[span] for span in gold_singletons])
+        else:
+            gold_infstats = None
+
         example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                          gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities,
+                          gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, gold_infstats,
                           gold_mention_cluster_map)
 
         if is_training and len(sentences) > self.config['max_training_sentences']:
@@ -231,7 +238,7 @@ class Tensorizer:
             return doc_key, example_tensor
 
     def truncate_example(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                         gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities,
+                         gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, gold_infstats,
                          gold_mention_cluster_map, sentence_offset=None):
         max_sentences = self.config["max_training_sentences"]
         num_sentences = input_ids.shape[0]
@@ -260,8 +267,9 @@ class Tensorizer:
         gold_sg_cluster_map = gold_sg_cluster_map[gold_sg_spans]
 
         gold_entities = gold_entities[gold_sg_spans]
+        gold_infstats = gold_infstats[gold_sg_spans]
 
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
-               is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, \
+               is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, gold_infstats, \
                gold_mention_cluster_map
 

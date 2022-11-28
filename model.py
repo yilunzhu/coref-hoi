@@ -24,6 +24,7 @@ class CorefModel(nn.Module):
 
         self.num_genres = num_genres if num_genres else len(config['genres'])
         self.num_entity_types = config['num_entity_types']
+        self.num_infstats = config['num_infstats']
         self.max_seg_len = config['max_segment_len']
         self.max_span_width = config['max_span_width']
         self.emb_sg_size = config['emb_sg_size']
@@ -62,6 +63,8 @@ class CorefModel(nn.Module):
         self.span_emb_sg_score_ffnn = self.make_ffnn(self.span_emb_size, [config['ffnn_size']] * config['ffnn_depth'], output_size=1)
         if config['mtl_entity']:
             self.entity_score_ffnn = self.make_ffnn(self.span_emb_size, [config['ffnn_size']] * config['ffnn_depth'], output_size=self.num_entity_types)
+        if config['mtl_infstat']:
+            self.infstat_score_ffnn = self.make_ffnn(self.span_emb_size, [config['ffnn_size']] * config['ffnn_depth'], output_size=self.num_infstats)
 
         self.span_width_score_ffnn = self.make_ffnn(config['feature_emb_size'], [config['ffnn_size']] * config['ffnn_depth'], output_size=1) if config['use_width_prior'] else None
         self.coarse_bilinear = self.make_ffnn(self.span_emb_size, 0, output_size=self.span_emb_size)
@@ -125,7 +128,7 @@ class CorefModel(nn.Module):
 
     def get_predictions_and_loss(self, input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map,
                                  is_training, gold_sg_starts=None, gold_sg_ends=None, gold_sg_cluster_map=None,
-                                 gold_starts=None, gold_ends=None, gold_entities=None,
+                                 gold_starts=None, gold_ends=None, gold_entities=None, gold_infstats=None,
                                  gold_mention_cluster_map=None):
         """ Model and input are already on the device """
         device = self.device
@@ -183,6 +186,11 @@ class CorefModel(nn.Module):
                     entity_labels = torch.matmul(torch.unsqueeze(gold_entities, 0).to(torch.float), same_sg_span.to(torch.float))
                     entity_labels = torch.squeeze(entity_labels.to(torch.long), 0)
                     entity_labels = (entity_labels >= 1).to(torch.long)
+                if conf['mtl_infstat']:   # add info status labels
+                    infstat_labels = torch.matmul(torch.unsqueeze(gold_infstats, 0).to(torch.float), same_sg_span.to(torch.float))
+                    infstat_labels = torch.squeeze(infstat_labels.to(torch.long), 0)
+                    infstat_labels = (infstat_labels >= 1).to(torch.long)
+
 
         elif conf['model_type'] != 'fast' and conf['sg_type'] == 'hard_encode':
             same_sg_start = (torch.unsqueeze(gold_sg_starts, 1) == torch.unsqueeze(candidate_starts, 0))
@@ -227,6 +235,8 @@ class CorefModel(nn.Module):
 
             if conf['mtl_entity']:
                 candidate_entity_logits = torch.squeeze(self.entity_score_ffnn(candidate_span_emb))
+            if conf['mtl_infstat']:
+                candidate_infstat_logits = torch.squeeze(self.infstat_score_ffnn(candidate_span_emb))
 
             if conf['use_width_prior']:
                 width_score = torch.squeeze(self.span_width_score_ffnn(self.emb_span_width_prior.weight), 1)
@@ -235,6 +245,8 @@ class CorefModel(nn.Module):
                 candidate_sg_scores += candidate_width_score
                 if conf['mtl_entity']:
                     candidate_entity_logits += candidate_width_score.unsqueeze(1).expand(-1, self.num_entity_types)
+                if conf['mtl_infstat']:
+                    candidate_infstat_logits += candidate_width_score.unsqueeze(1).expand(-1, self.num_infstats)
 
         # Extract top spans
         if conf['model_type'] == 'fast':
@@ -265,6 +277,9 @@ class CorefModel(nn.Module):
             if conf['mtl_entity']:
                 top_span_entity_logits = candidate_entity_logits[selected_idx]
                 top_span_entity_labels = entity_labels[selected_idx] if do_loss else None
+            if conf['mtl_infstat']:
+                top_span_infstat_logits = candidate_infstat_logits[selected_idx]
+                top_span_infstat_labels = infstat_labels[selected_idx] if do_loss else None
 
         # Coarse pruning on each mention's antecedents
         max_top_antecedents = min(num_top_spans, conf['max_top_antecedents'])
@@ -374,7 +389,7 @@ class CorefModel(nn.Module):
         if conf['loss_type'] == 'marginalized':
             log_marginalized_antecedent_scores = torch.logsumexp(top_antecedent_scores + torch.log(top_antecedent_gold_labels.to(torch.float)), dim=1)
             log_norm = torch.logsumexp(top_antecedent_scores, dim=1)
-            loss = torch.sum(log_norm - log_marginalized_antecedent_scores) * (1 - conf['sg_loss_coef'] - conf['entity_loss_coef'])
+            loss = torch.sum(log_norm - log_marginalized_antecedent_scores) * (1 - conf['sg_loss_coef'] - conf['entity_loss_coef'] - conf['infstat_loss_coef'])
         elif conf['loss_type'] == 'hinge':
             top_antecedent_mask = torch.cat([torch.ones(num_top_spans, 1, dtype=torch.bool, device=device), top_antecedent_mask], dim=1)
             top_antecedent_scores += torch.log(top_antecedent_mask.to(torch.float))
@@ -412,6 +427,12 @@ class CorefModel(nn.Module):
             loss_entity = loss_entity * conf['entity_loss_coef']
             loss += loss_entity
 
+        # Add info status loss
+        if conf['model_type'] != 'fast' and conf['mtl_infstat']:
+            loss_infstat = self.cross_entropy_loss(top_span_infstat_logits, top_span_infstat_labels)
+            loss_infstat = loss_infstat * conf['infstat_loss_coef']
+            loss += loss_infstat
+
         if conf['higher_order'] == 'cluster_merging':
             top_pairwise_scores += cluster_merging_scores
             top_antecedent_scores = torch.cat([torch.zeros(num_top_spans, 1, device=device), top_pairwise_scores], dim=1)
@@ -435,6 +456,8 @@ class CorefModel(nn.Module):
                     logger.info('mention loss: %.4f' % loss_sg)
                 if conf['entity_loss_coef']:
                     logger.info('entity loss: %.4f' % loss_entity)
+                if conf['infstat_loss_coef']:
+                    logger.info('info status loss: %.4f' % loss_infstat)
                 if conf['loss_type'] == 'marginalized':
                     logger.info('norm/gold: %.4f/%.4f; loss: %.4f' % (torch.sum(log_norm), torch.sum(log_marginalized_antecedent_scores), loss))
                 else:
