@@ -35,16 +35,16 @@ class CorefDataProcessor:
         """ For dataset samples """
         if self.testset != 'none' and self.testset != self.config['dataset']:
             cache_path = self.get_cache_path(dataset=self.testset, domain='ood')
-            if self.testset == 'ontonotes':
+            if self.testset == 'ontogum':
+                to_add = 'gum.'
+            else:
                 to_add = ''
                 self.config["singleton_suffix"] = 'sg'
-            elif self.testset == 'ontogum':
-                to_add = 'gum.'
             paths = {
                 'tst': join(self.data_dir, self.testset, f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
-                'tst': join(self.data_dir, self.testset + '_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
+                # 'tst': join(self.data_dir, self.testset + '_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
         else:
             cache_path = self.get_cache_path(dataset=self.config['dataset'], domain='ind')
@@ -75,12 +75,16 @@ class CorefDataProcessor:
             for split, path in paths.items():
                 logger.info('Tensorizing examples from %s; results will be cached)' % path)
                 is_training = (split == 'trn')
-                sg_path = singleton_paths[split]
+
                 with open(path, 'r') as f:
                     samples = [json.loads(line) for line in f.readlines()]
-                with open(sg_path, 'r') as f:
-                    sg_samples = [json.loads(line) for line in f.readlines()]
-                tensor_samples = [tensorizer.tensorize_example(samples[i], sg_samples[i], is_training) for i in range(len(samples))]
+                if singleton_paths:
+                    sg_path = singleton_paths[split]
+                    with open(sg_path, 'r') as f:
+                        sg_samples = [json.loads(line) for line in f.readlines()]
+                    tensor_samples = [tensorizer.tensorize_example(samples[i], sg_samples[i], is_training) for i in range(len(samples))]
+                else:
+                    tensor_samples = [tensorizer.tensorize_example(samples[i], None, is_training) for i in range(len(samples))]
                 self.tensor_samples[split] = [(doc_key, self.convert_to_torch_tensor(*tensor)) for doc_key, tensor in tensor_samples]
             self.stored_info = tensorizer.stored_info
             # Cache tensorized samples
@@ -154,25 +158,26 @@ class Tensorizer:
                 speaker_dict[speaker] = len(speaker_dict)
         return speaker_dict
 
-    def tensorize_example(self, example, sg_example, is_training):
+    def tensorize_example(self, example, sg_example=None, is_training=False):
         # Mentions and clusters
         clusters = example['clusters']
         gold_mentions = sorted(tuple(mention) for mention in util.flatten(clusters))
-        sg_clusters = sg_example['clusters']
-        gold_singletons = sorted(tuple(sg) for sg in util.flatten(sg_clusters))
         gold_mention_map = {mention: idx for idx, mention in enumerate(gold_mentions)}
         gold_mention_cluster_map = np.zeros(len(gold_mentions))  # 0: no cluster
-        entity = sg_example['entity'] if 'entity' in sg_example else None
-        infstat = sg_example['infstat'] if 'infstat' in sg_example else None
         for cluster_id, cluster in enumerate(clusters):
             for mention in cluster:
                 gold_mention_cluster_map[gold_mention_map[tuple(mention)]] = cluster_id + 1
 
-        gold_sg_map = {sg: idx for idx, sg in enumerate(gold_singletons)}
-        gold_sg_cluster_map = np.zeros(len(gold_singletons))  # 0: no cluster
-        for sg_cluster_id, sg_cluster in enumerate(sg_clusters):
-            for sg in sg_cluster:
-                gold_sg_cluster_map[gold_sg_map[tuple(sg)]] = sg_cluster_id + 1
+        if sg_example:
+            sg_clusters = sg_example['clusters']
+            gold_singletons = sorted(tuple(sg) for sg in util.flatten(sg_clusters))
+            entity = sg_example['entity'] if 'entity' in sg_example else None
+            infstat = sg_example['infstat'] if 'infstat' in sg_example else None
+            gold_sg_map = {sg: idx for idx, sg in enumerate(gold_singletons)}
+            [gold_sg_cluster_map] = np.zeros(len(gold_singletons))  # 0: no cluster
+            for sg_cluster_id, sg_cluster in enumerate(sg_clusters):
+                for sg in sg_cluster:
+                    gold_sg_cluster_map[gold_sg_map[tuple(sg)]] = sg_cluster_id + 1
 
         # Speakers
         speakers = example['speakers']
@@ -212,25 +217,32 @@ class Tensorizer:
         # Construct example
         genre = self.stored_info['genre_dict'].get(doc_key[:2], 0)
         gold_starts, gold_ends = self._tensorize_spans(gold_mentions)
-        gold_sg_starts, gold_sg_ends = self._tensorize_spans(gold_singletons)
 
-        # Construct entity info, mapping entity types to each gold span
-        # list -> dict, mapping each span to entity category
-        if entity:
-            span2entity = {(e[0], e[1]): e[2] for e in entity}
-            gold_entities = np.array([span2entity[span] for span in gold_singletons])
+        if sg_example:
+            gold_sg_starts, gold_sg_ends = self._tensorize_spans(gold_singletons)
+
+            # Construct entity info, mapping entity types to each gold span
+            # list -> dict, mapping each span to entity category
+            if entity:
+                span2entity = {(e[0], e[1]): e[2] for e in entity}
+                gold_entities = np.array([span2entity[span] for span in gold_singletons])
+            else:
+                gold_entities = None
+
+            if infstat:
+                span2infstat = {(e[0], e[1]): e[2] for e in infstat}
+                gold_infstats = np.array([span2infstat[span] for span in gold_singletons])
+            else:
+                gold_infstats = None
+
+            example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
+                              gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, gold_infstats,
+                              gold_mention_cluster_map)
         else:
-            gold_entities = None
-
-        if infstat:
-            span2infstat = {(e[0], e[1]): e[2] for e in infstat}
-            gold_infstats = np.array([span2infstat[span] for span in gold_singletons])
-        else:
-            gold_infstats = None
-
-        example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                          gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, gold_infstats,
-                          gold_mention_cluster_map)
+            example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
+                              [], [], [], gold_starts, gold_ends, [],
+                              [],
+                              gold_mention_cluster_map)
 
         if is_training and len(sentences) > self.config['max_training_sentences']:
             return doc_key, self.truncate_example(*example_tensor)
@@ -261,13 +273,13 @@ class Tensorizer:
         gold_ends = gold_ends[gold_spans] - word_offset
         gold_mention_cluster_map = gold_mention_cluster_map[gold_spans]
 
-        gold_sg_spans = (gold_sg_starts < word_offset + num_words) & (gold_sg_ends >= word_offset)
-        gold_sg_starts = gold_sg_starts[gold_sg_spans] - word_offset
-        gold_sg_ends = gold_sg_ends[gold_sg_spans] - word_offset
-        gold_sg_cluster_map = gold_sg_cluster_map[gold_sg_spans]
+        gold_sg_spans = (gold_sg_starts < word_offset + num_words) & (gold_sg_ends >= word_offset) if gold_sg_starts else None
+        gold_sg_starts = gold_sg_starts[gold_sg_spans] - word_offset if gold_sg_starts else None
+        gold_sg_ends = gold_sg_ends[gold_sg_spans] - word_offset if gold_sg_ends else None
+        gold_sg_cluster_map = gold_sg_cluster_map[gold_sg_spans] if gold_sg_cluster_map else None
 
-        gold_entities = gold_entities[gold_sg_spans]
-        gold_infstats = gold_infstats[gold_sg_spans]
+        gold_entities = gold_entities[gold_sg_spans] if gold_entities else None
+        gold_infstats = gold_infstats[gold_sg_spans] if gold_infstats else None
 
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
                is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, gold_infstats, \

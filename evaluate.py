@@ -21,7 +21,7 @@ if __name__ == '__main__':
     parser.add_argument("--config", default="train_mtl")
     parser.add_argument("--checkpoint")
     parser.add_argument("--gpu", default=0, type=int)
-    parser.add_argument("--dataset", default="ontonotes", help="Select from ['ontonotes', 'ontogum']")
+    parser.add_argument("--dataset", default="ontonotes", help="Select from ['ontonotes', 'ontogum', 'wikicoref']")
     # parser.add_argument("--conll_path", default="./data/ontogum/test.gum.english.v4_gold_conll")
     args = parser.parse_args()
 
@@ -29,6 +29,8 @@ if __name__ == '__main__':
         conll_path = "./data/ontogum/test.gum.english.v4_gold_conll"
     elif args.dataset == "ontonotes":
         conll_path = "./data/test.english.v4_gold_conll"
+    elif args.dataset == "wikicoref":
+        conll_path = "./data/wikicoref/wikicoref.v4_gold_conll"
     else:
         raise ValueError(f"Unsupported dataset {args.dataset}")
 
