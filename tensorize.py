@@ -233,7 +233,7 @@ class Tensorizer:
                           gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, gold_infstats,
                           gold_mention_cluster_map)
 
-        if is_training and len(sentences) > self.config['max_training_sentences']:
+        if len(sentences) > self.config['max_training_sentences']:
             return doc_key, self.truncate_example(*example_tensor)
         else:
             return doc_key, example_tensor
