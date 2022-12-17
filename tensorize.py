@@ -44,7 +44,7 @@ class CorefDataProcessor:
                 'tst': join(self.data_dir, self.testset, f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
             singleton_paths = {
-                # 'tst': join(self.data_dir, self.testset + '_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
+                'tst': join(self.data_dir, self.testset + '_' + self.config["singleton_suffix"], f'test.{to_add}{self.language}.{self.max_seg_len}.jsonlines')
             }
         else:
             cache_path = self.get_cache_path(dataset=self.config['dataset'], domain='ind')
@@ -174,7 +174,7 @@ class Tensorizer:
             entity = sg_example['entity'] if 'entity' in sg_example else None
             infstat = sg_example['infstat'] if 'infstat' in sg_example else None
             gold_sg_map = {sg: idx for idx, sg in enumerate(gold_singletons)}
-            [gold_sg_cluster_map] = np.zeros(len(gold_singletons))  # 0: no cluster
+            gold_sg_cluster_map = np.zeros(len(gold_singletons))  # 0: no cluster
             for sg_cluster_id, sg_cluster in enumerate(sg_clusters):
                 for sg in sg_cluster:
                     gold_sg_cluster_map[gold_sg_map[tuple(sg)]] = sg_cluster_id + 1
@@ -240,8 +240,8 @@ class Tensorizer:
                               gold_mention_cluster_map)
         else:
             example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                              [], [], [], gold_starts, gold_ends, [],
-                              [],
+                              None, None, None, gold_starts, gold_ends, None,
+                              None,
                               gold_mention_cluster_map)
 
         if is_training and len(sentences) > self.config['max_training_sentences']:
