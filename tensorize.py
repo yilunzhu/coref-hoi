@@ -112,8 +112,8 @@ class CorefDataProcessor:
         gold_sg_ends = torch.tensor(gold_sg_ends, dtype=torch.long)
         gold_mention_cluster_map = torch.tensor(gold_mention_cluster_map, dtype=torch.long)
         gold_sg_cluster_map = torch.tensor(gold_sg_cluster_map, dtype=torch.long)
-        gold_entities = torch.tensor(gold_entities, dtype=torch.long) if gold_entities is not None else None
-        gold_infstat = torch.tensor(gold_infstat, dtype=torch.long) if gold_infstat is not None else None
+        gold_entities = torch.tensor(gold_entities, dtype=torch.long) if gold_entities is not None else []
+        gold_infstat = torch.tensor(gold_infstat, dtype=torch.long) if gold_infstat is not None else []
         return input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, \
                is_training, gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, \
                gold_starts, gold_ends, gold_entities, gold_infstat, gold_mention_cluster_map
@@ -171,8 +171,8 @@ class Tensorizer:
         if sg_example:
             sg_clusters = sg_example['clusters']
             gold_singletons = sorted(tuple(sg) for sg in util.flatten(sg_clusters))
-            entity = sg_example['entity'] if 'entity' in sg_example else None
-            infstat = sg_example['infstat'] if 'infstat' in sg_example else None
+            entity = sg_example['entity'] if 'entity' in sg_example else []
+            infstat = sg_example['infstat'] if 'infstat' in sg_example else []
             gold_sg_map = {sg: idx for idx, sg in enumerate(gold_singletons)}
             gold_sg_cluster_map = np.zeros(len(gold_singletons))  # 0: no cluster
             for sg_cluster_id, sg_cluster in enumerate(sg_clusters):
@@ -227,21 +227,21 @@ class Tensorizer:
                 span2entity = {(e[0], e[1]): e[2] for e in entity}
                 gold_entities = np.array([span2entity[span] for span in gold_singletons])
             else:
-                gold_entities = None
+                gold_entities = []
 
             if infstat:
                 span2infstat = {(e[0], e[1]): e[2] for e in infstat}
                 gold_infstats = np.array([span2infstat[span] for span in gold_singletons])
             else:
-                gold_infstats = None
+                gold_infstats = []
 
             example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
                               gold_sg_starts, gold_sg_ends, gold_sg_cluster_map, gold_starts, gold_ends, gold_entities, gold_infstats,
                               gold_mention_cluster_map)
         else:
             example_tensor = (input_ids, input_mask, speaker_ids, sentence_len, genre, sentence_map, is_training,
-                              None, None, None, gold_starts, gold_ends, None,
-                              None,
+                              [], [], [], gold_starts, gold_ends, [],
+                              [],
                               gold_mention_cluster_map)
 
         if is_training and len(sentences) > self.config['max_training_sentences']:
